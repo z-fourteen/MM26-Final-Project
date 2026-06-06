@@ -1,0 +1,10 @@
+# 忽略数据集和训练输出模型
+gaussian-splatting/data/
+gaussian-splatting/output/
+
+# 忽略 Python 缓存和本地临时文件
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.ply
+
