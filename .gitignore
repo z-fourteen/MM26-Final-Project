@@ -8,3 +8,9 @@ __pycache__/
 .ipynb_checkpoints/
 *.ply
 
+
+# Local migration leftovers / Codex workspace metadata
+MM26-Final-Project/
+vggt_old_backup/
+.agents/
+.codex/
