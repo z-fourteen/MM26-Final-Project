@@ -1,5 +1,4 @@
-# 忽略数据集和训练输出模型
-datasets/
+# 忽略训练输出模型
 gaussian-splatting/data/
 gaussian-splatting/output/
 
