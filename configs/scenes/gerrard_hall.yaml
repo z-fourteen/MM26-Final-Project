@@ -1,0 +1,12 @@
+scene_name: gerrard_hall
+dataset_name: gerrard-hall
+image_dir: data/scenes/gerrard_hall/images
+feature_dir: data/scenes/gerrard_hall/features
+match_dir: data/scenes/gerrard_hall/matches
+verified_dir: data/scenes/gerrard_hall/verified
+track_dir: data/scenes/gerrard_hall/tracks
+sparse_dir: data/scenes/gerrard_hall/sparse/0
+undistorted_dir: data/scenes/gerrard_hall/undistorted
+output_dir: outputs/gerrard_hall
+subset:
+  enabled: false
