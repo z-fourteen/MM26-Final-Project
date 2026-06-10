@@ -15,3 +15,24 @@ vggt_old_backup/
 .agents/
 .codex/
 *.pdf
+
+# Dataset archives, raw images, generated caches, and large outputs.
+/data/raw/
+/data/external/
+/data/scenes/*/images/*
+/data/scenes/*/images_resized/*
+/data/scenes/*/features/*
+/data/scenes/*/matches/*
+/data/scenes/*/verified/*
+/data/scenes/*/tracks/*
+/data/scenes/*/sparse/*
+/data/scenes/*/undistorted/*
+/outputs/*
+/third_party/
+
+# Keep empty project structure in Git.
+!data/scenes/**/.gitkeep
+!outputs/**/.gitkeep
+!data/scenes/*/sparse/
+!data/scenes/*/sparse/0/
+!data/scenes/*/sparse/0/.gitkeep

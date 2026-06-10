@@ -1,0 +1,12 @@
+scene_name: truck
+dataset_name: truck
+image_dir: data/scenes/truck/images
+feature_dir: data/scenes/truck/features
+match_dir: data/scenes/truck/matches
+verified_dir: data/scenes/truck/verified
+track_dir: data/scenes/truck/tracks
+sparse_dir: data/scenes/truck/sparse/0
+undistorted_dir: data/scenes/truck/undistorted
+output_dir: outputs/truck
+subset:
+  enabled: false

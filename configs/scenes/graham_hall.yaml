@@ -1,0 +1,12 @@
+scene_name: graham_hall
+dataset_name: graham-hall
+image_dir: data/scenes/graham_hall/images
+feature_dir: data/scenes/graham_hall/features
+match_dir: data/scenes/graham_hall/matches
+verified_dir: data/scenes/graham_hall/verified
+track_dir: data/scenes/graham_hall/tracks
+sparse_dir: data/scenes/graham_hall/sparse/0
+undistorted_dir: data/scenes/graham_hall/undistorted
+output_dir: outputs/graham_hall
+subset:
+  enabled: false

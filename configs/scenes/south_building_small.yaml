@@ -11,4 +11,5 @@ output_dir: outputs/south_building_small
 subset:
   enabled: true
   target_num_images: 50
-  selection: sequential_overlap
+  selection: filename_sorted_first_n
+  source_image_dir: data\raw\south-building\images
