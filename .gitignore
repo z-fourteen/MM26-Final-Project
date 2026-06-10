@@ -1,4 +1,5 @@
 # 忽略数据集和训练输出模型
+datasets/
 gaussian-splatting/data/
 gaussian-splatting/output/
 
@@ -14,3 +15,5 @@ MM26-Final-Project/
 vggt_old_backup/
 .agents/
 .codex/
+
+.claude/
