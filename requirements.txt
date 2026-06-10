@@ -1,0 +1,10 @@
+numpy>=1.24
+scipy>=1.10
+opencv-contrib-python>=4.8
+pycolmap>=3.10
+open3d>=0.18
+networkx>=3.0
+matplotlib>=3.7
+Pillow>=10.0
+PyYAML>=6.0
+tqdm>=4.66
