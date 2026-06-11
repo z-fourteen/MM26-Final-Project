@@ -19,7 +19,7 @@ from src.sfm.reconstruction import (
     observation_lookup,
     save_reconstruction_state,
 )
-from src.sfm.triangulation import robust_triangulate_track
+from src.sfm.triangulation import robust_triangulate_track, robust_triangulate_track_recursive
 
 
 @dataclass(frozen=True)
@@ -275,6 +275,65 @@ def passes_new_point_error_policy(
     return True
 
 
+def triangulate_track_candidates(
+    observations: list[TrackObservation],
+    state: ReconstructionState,
+    projections: dict[str, np.ndarray],
+    cameras: dict[str, object],
+    keypoints_by_name: dict[str, np.ndarray],
+    valid_edges: set[tuple[str, str]],
+    max_reproj_error_px: float,
+    min_angle_deg: float,
+    min_track_length: int,
+    max_pair_samples: int,
+    enable_recursive_track_splitting: bool,
+    min_recursive_consensus_size: int,
+) -> list:
+    points2d = np.stack(
+        [
+            keypoints_by_name[observation.image_name][observation.keypoint_idx, :2].astype(np.float64)
+            for observation in observations
+        ]
+    )
+    image_names = [observation.image_name for observation in observations]
+    valid_pair_mask = valid_pair_mask_for_observations(observations, valid_edges)
+    if not np.any(np.triu(valid_pair_mask, k=1)):
+        return []
+
+    projection_matrices = [projections[image_name] for image_name in image_names]
+    rotations = [state.registered_images[image_name].R for image_name in image_names]
+    translations = [state.registered_images[image_name].t for image_name in image_names]
+    intrinsics = [cameras[image_name].K for image_name in image_names]
+    if enable_recursive_track_splitting:
+        return robust_triangulate_track_recursive(
+            projection_matrices=projection_matrices,
+            rotations=rotations,
+            translations=translations,
+            intrinsics=intrinsics,
+            points2d=points2d,
+            max_reproj_error_px=max_reproj_error_px,
+            min_triangulation_angle_deg=min_angle_deg,
+            min_track_length=min_track_length,
+            max_pair_samples=max_pair_samples,
+            valid_pair_mask=valid_pair_mask,
+            min_consensus_size=min_recursive_consensus_size,
+        )
+
+    result = robust_triangulate_track(
+        projection_matrices=projection_matrices,
+        rotations=rotations,
+        translations=translations,
+        intrinsics=intrinsics,
+        points2d=points2d,
+        max_reproj_error_px=max_reproj_error_px,
+        min_triangulation_angle_deg=min_angle_deg,
+        min_track_length=min_track_length,
+        max_pair_samples=max_pair_samples,
+        valid_pair_mask=valid_pair_mask,
+    )
+    return [] if result is None else [result]
+
+
 def resolve_rt_policy(args: argparse.Namespace, default: dict) -> dict:
     max_reproj_error_px = float(default["sfm"].get("max_reproj_error_px", 8.0))
     min_angle_deg = float(default["sfm"].get("min_triangulation_angle_deg", 1.5))
@@ -344,9 +403,12 @@ def main() -> int:
     parser.add_argument("--max-observation-error", type=float, default=8.0)
     parser.add_argument("--report-name", default="triangulation_report.json")
     parser.add_argument("--enable-track-merge", action="store_true")
+    parser.add_argument("--enable-recursive-track-splitting", action="store_true")
+    parser.add_argument("--min-recursive-consensus-size", type=int, default=3)
     parser.add_argument("--rt-policy", default="current", choices=["current", "post_ba_moderate", "post_ba_strict"])
     parser.add_argument("--max-new-point-median-error", type=float, default=0.0)
     parser.add_argument("--max-new-point-max-error", type=float, default=0.0)
+    parser.add_argument("--dry-run", action="store_true", help="Write report only without changing reconstruction state.")
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -424,6 +486,9 @@ def main() -> int:
     skipped_short = 0
     skipped_no_valid_view_pair = 0
     skipped_geometry = 0
+    recursive_split_tracks = 0
+    recursive_extra_points = 0
+    recursive_candidate_points = 0
     skipped_observations_by_residual = 0
     skipped_new_point_error_policy = 0
     merged_tracks = 0
@@ -497,50 +562,52 @@ def main() -> int:
                     augmented_observations += 1
             continue
 
-        points2d = np.stack(
-            [
-                keypoints_by_name[observation.image_name][observation.keypoint_idx, :2].astype(np.float64)
-                for observation in observations
-            ]
-        )
-        image_names = [observation.image_name for observation in observations]
         valid_pair_mask = valid_pair_mask_for_observations(observations, track_build.valid_edges)
         if not np.any(np.triu(valid_pair_mask, k=1)):
             skipped_no_valid_view_pair += 1
             continue
-        result = robust_triangulate_track(
-            projection_matrices=[projections[image_name] for image_name in image_names],
-            rotations=[state.registered_images[image_name].R for image_name in image_names],
-            translations=[state.registered_images[image_name].t for image_name in image_names],
-            intrinsics=[cameras[image_name].K for image_name in image_names],
-            points2d=points2d,
+        results = triangulate_track_candidates(
+            observations=observations,
+            state=state,
+            projections=projections,
+            cameras=cameras,
+            keypoints_by_name=keypoints_by_name,
+            valid_edges=track_build.valid_edges,
             max_reproj_error_px=max_reproj_error_px,
-            min_triangulation_angle_deg=min_angle_deg,
+            min_angle_deg=min_angle_deg,
             min_track_length=min_track_length,
             max_pair_samples=args.max_pair_samples,
-            valid_pair_mask=valid_pair_mask,
+            enable_recursive_track_splitting=bool(args.enable_recursive_track_splitting),
+            min_recursive_consensus_size=args.min_recursive_consensus_size,
         )
-        if result is None:
+        if not results:
             skipped_geometry += 1
             continue
-        if not passes_new_point_error_policy(
-            result.reprojection_errors,
-            max_new_point_median_error_px=max_new_point_median_error_px,
-            max_new_point_max_error_px=max_new_point_max_error_px,
-        ):
-            skipped_new_point_error_policy += 1
-            continue
+        recursive_candidate_points += max(0, len(results) - 1)
+        accepted_from_track = 0
+        for result in results:
+            if not passes_new_point_error_policy(
+                result.reprojection_errors,
+                max_new_point_median_error_px=max_new_point_median_error_px,
+                max_new_point_max_error_px=max_new_point_max_error_px,
+            ):
+                skipped_new_point_error_policy += 1
+                continue
 
-        inlier_observations = [observations[int(index)] for index in result.inlier_indices]
-        color_source = inlier_observations[0]
-        if color_source.image_name not in images_rgb:
-            images_rgb[color_source.image_name] = read_rgb(image_by_name[color_source.image_name])
-        color_point = keypoints_by_name[color_source.image_name][color_source.keypoint_idx, :2]
-        new_points.append(result.point3d)
-        new_colors.append(sample_color(images_rgb[color_source.image_name], color_point))
-        new_point_observations.append(inlier_observations)
-        new_point_errors.append(float(np.median(result.reprojection_errors)))
-        new_point_angles.append(float(result.triangulation_angle_deg))
+            inlier_observations = [observations[int(index)] for index in result.inlier_indices]
+            color_source = inlier_observations[0]
+            if color_source.image_name not in images_rgb:
+                images_rgb[color_source.image_name] = read_rgb(image_by_name[color_source.image_name])
+            color_point = keypoints_by_name[color_source.image_name][color_source.keypoint_idx, :2]
+            new_points.append(result.point3d)
+            new_colors.append(sample_color(images_rgb[color_source.image_name], color_point))
+            new_point_observations.append(inlier_observations)
+            new_point_errors.append(float(np.median(result.reprojection_errors)))
+            new_point_angles.append(float(result.triangulation_angle_deg))
+            accepted_from_track += 1
+        if accepted_from_track > 1:
+            recursive_split_tracks += 1
+            recursive_extra_points += accepted_from_track - 1
 
     if new_points:
         start_id = int(state.points3d.shape[0])
@@ -551,9 +618,14 @@ def main() -> int:
             for observation in observations:
                 add_observation_if_missing(state, existing, point3d_id, observation)
 
-    state_path, registered_npz_path = save_reconstruction_state(state, sparse_dir)
+    if args.dry_run:
+        state_path = sparse_dir / "reconstruction_state.json"
+        registered_npz_path = sparse_dir / "registered_images.npz"
+    else:
+        state_path, registered_npz_path = save_reconstruction_state(state, sparse_dir)
     report = {
         "scene_name": scene["scene_name"],
+        "dry_run": bool(args.dry_run),
         "rt_stage": args.stage,
         "rt_policy": rt_policy["rt_policy"],
         "residual_report_path": residual_report_path,
@@ -579,6 +651,11 @@ def main() -> int:
         "skipped_conflicting_point_tracks": int(skipped_conflicting_point_tracks),
         "skipped_no_valid_view_pair_tracks": int(skipped_no_valid_view_pair),
         "skipped_geometry_tracks": int(skipped_geometry),
+        "recursive_track_splitting_enabled": bool(args.enable_recursive_track_splitting),
+        "min_recursive_consensus_size": int(args.min_recursive_consensus_size),
+        "recursive_split_tracks": int(recursive_split_tracks),
+        "recursive_extra_points": int(recursive_extra_points),
+        "recursive_candidate_extra_points": int(recursive_candidate_points),
         "skipped_observations_by_residual": int(skipped_observations_by_residual),
         "skipped_new_point_error_policy": int(skipped_new_point_error_policy),
         "track_merge_implemented": True,

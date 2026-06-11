@@ -175,6 +175,63 @@ def robust_triangulate_track(
     )
 
 
+def robust_triangulate_track_recursive(
+    projection_matrices: list[np.ndarray],
+    rotations: list[np.ndarray],
+    translations: list[np.ndarray],
+    intrinsics: list[np.ndarray],
+    points2d: np.ndarray,
+    max_reproj_error_px: float,
+    min_triangulation_angle_deg: float,
+    min_track_length: int,
+    max_pair_samples: int = 100,
+    valid_pair_mask: np.ndarray | None = None,
+    min_consensus_size: int = 3,
+) -> list[TriangulatedTrack]:
+    """Recover multiple independent points from one potentially merged track."""
+    num_observations = int(points2d.shape[0])
+    effective_min_track_length = max(int(min_track_length), int(min_consensus_size))
+    if num_observations < effective_min_track_length:
+        return []
+
+    remaining_indices = np.arange(num_observations, dtype=np.int32)
+    recovered: list[TriangulatedTrack] = []
+
+    while remaining_indices.shape[0] >= effective_min_track_length:
+        subset_mask = None
+        if valid_pair_mask is not None:
+            subset_mask = valid_pair_mask[np.ix_(remaining_indices, remaining_indices)]
+        result = robust_triangulate_track(
+            projection_matrices=[projection_matrices[int(index)] for index in remaining_indices],
+            rotations=[rotations[int(index)] for index in remaining_indices],
+            translations=[translations[int(index)] for index in remaining_indices],
+            intrinsics=[intrinsics[int(index)] for index in remaining_indices],
+            points2d=points2d[remaining_indices],
+            max_reproj_error_px=max_reproj_error_px,
+            min_triangulation_angle_deg=min_triangulation_angle_deg,
+            min_track_length=effective_min_track_length,
+            max_pair_samples=max_pair_samples,
+            valid_pair_mask=subset_mask,
+        )
+        if result is None or result.inlier_indices.shape[0] < effective_min_track_length:
+            break
+
+        original_inliers = remaining_indices[result.inlier_indices].astype(np.int32)
+        recovered.append(
+            TriangulatedTrack(
+                point3d=result.point3d.astype(np.float64),
+                inlier_indices=original_inliers,
+                reprojection_errors=result.reprojection_errors.astype(np.float64),
+                triangulation_angle_deg=float(result.triangulation_angle_deg),
+            )
+        )
+        keep_mask = np.ones(remaining_indices.shape[0], dtype=bool)
+        keep_mask[result.inlier_indices] = False
+        remaining_indices = remaining_indices[keep_mask]
+
+    return recovered
+
+
 def _evaluate_candidate(
     point3d: np.ndarray,
     rotations: list[np.ndarray],
