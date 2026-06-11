@@ -2077,3 +2077,168 @@ Phase 7D.2 stricter post-BA RT acceptance
 ```
 
 建议优先做 7D.2，因为 post-BA RT 新点 median/mean reprojection error `3.829 / 3.972 px` 明显高于 pre-BA RT，先改进 RT 接受策略会让后续自动迭代更稳定。
+
+---
+
+## 21. Phase 7E Automatic BA/RT/Filtering Controller
+
+### 21.1 执行动机
+
+Phase 7D 手动跑通了一轮论文式流程：
+
+```text
+pre-BA RT
+global BA
+filtering
+post-BA RT
+global BA
+filtering
+```
+
+但论文 4.4 强调的是迭代执行，直到：
+
+```text
+filtered observations diminish
+post-BA RT points diminish
+```
+
+因此本阶段新增自动控制器，用于判断当前未收敛到底是因为迭代次数不足，还是因为 RT / track continuation 本身还不够稳定。
+
+### 21.2 已完成内容
+
+新增代码：
+
+- `src/tools/run_ba_rt_refinement.py`
+  - 自动执行 registered residual evaluation。
+  - 自动执行 pre-BA RT。
+  - 自动执行 global BA。
+  - 自动执行 filtering。
+  - 自动执行 post-BA RT。
+  - 自动执行 final BA/filtering。
+  - 每轮写出独立 report。
+  - 汇总输出 `ba_rt_refinement_report.json`。
+
+停止条件：
+
+```text
+post_ba_rt_new_points < min_new_points
+and
+final_filtering_removed_observations < min_filtered_observations
+```
+
+本轮实验使用：
+
+```text
+max_refinement_iterations = 2
+min_new_points = 50
+min_filtered_observations = 50
+```
+
+### 21.3 运行命令
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_ba_rt_refinement \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-refinement-iterations 2 \
+  --min-new-points 50 \
+  --min-filtered-observations 50 \
+  --max-observation-error 8.0 \
+  --max-point-median-error 8.0 \
+  --max-point-max-error 32.0 \
+  --ba-max-iterations 40 \
+  --ba-max-points 1200 \
+  --ba-max-observations 6000 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --min-track-length 2 \
+  --report-name phase7e_ba_rt_refinement_report.json
+```
+
+### 21.4 验收结果
+
+自动控制器从 Phase 7D final state 出发：
+
+```text
+Baseline points3D: 4357
+Baseline observations: 12434
+Baseline mean residual: 1.776 px
+Baseline median residual: 1.271 px
+Baseline P95 residual: 5.403 px
+Baseline observations > 8 px: 0
+```
+
+第 1 轮：
+
+```text
+pre-BA RT new points: 145
+post-BA RT new points: 246
+filtering after pre-BA removed observations: 985
+final filtering removed observations: 729
+final points3D: 4366
+final observations: 12450
+final mean residual: 1.784 px
+final observations > 8 px: 0
+```
+
+第 2 轮：
+
+```text
+pre-BA RT new points: 136
+post-BA RT new points: 225
+filtering after pre-BA removed observations: 969
+final filtering removed observations: 739
+final points3D: 4375
+final observations: 12469
+final mean residual: 1.798 px
+final observations > 8 px: 0
+```
+
+收敛状态：
+
+```text
+converged: false
+stop_reason: max_refinement_iterations_reached
+```
+
+### 21.5 当前结论
+
+Phase 7E 证明了自动迭代控制器可以稳定调度 BA/RT/filtering，但当前模型没有在 2 轮内达到论文式停止条件。
+
+关键观察：
+
+- `post_ba_rt_new_points` 从 `246` 降到 `225`，有下降趋势，但仍远高于 `50`。
+- `final_filtering_removed_observations` 从 `729` 到 `739`，没有下降，说明 RT 仍反复引入大量需要过滤的 observations。
+- 最终 `>8px` observations 能被 filtering 清回 0，但 mean residual 从 `1.784` 到 `1.798` 略升，说明单纯增加迭代次数并不足以改善质量。
+
+因此，当前不应优先做 intrinsic refinement。更合理的下一步是：
+
+```text
+Phase 7F Track Merge / stricter RT continuation
+```
+
+原因：
+
+- 论文中的 post-BA RT 明确提到继续 tracks 并尝试 merge tracks，以增加下一轮 BA 的 redundancy。
+- 当前 `track_merge_implemented = false`。
+- 当前 RT 每轮仍引入大量需要过滤的 observations，说明需要更严格的 track continuation / merge / acceptance 逻辑，而不是先释放内参自由度。
+
+下一步建议：
+
+```text
+Phase 7F Track Merge and RT Acceptance Refinement
+```
+
+优先实现保守 track merge：
+
+- 只合并没有同图冲突的 points/tracks。
+- 合并前后 reprojection error 必须低于阈值。
+- 合并后 triangulation angle 必须合格。
+- report 中记录 accepted/rejected merge 数量和原因。
+
+随后再重新运行 Phase 7E 自动控制器，观察：
+
+```text
+post_ba_rt_new_points 是否下降
+final_filtering_removed_observations 是否下降
+final residual 是否稳定
+```
