@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -90,6 +91,38 @@ def load_initial_state(sparse_dir: Path) -> ReconstructionState:
         points3d=points3d,
         colors=colors,
         observations=observations,
+    )
+
+
+def load_reconstruction_state(sparse_dir: Path) -> ReconstructionState:
+    state_path = sparse_dir / "reconstruction_state.json"
+    points_path = sparse_dir / "reconstruction_points.npz"
+    if not state_path.exists():
+        return load_initial_state(sparse_dir)
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    registered_images = {
+        image_name: RegisteredImage(
+            image_name=image_name,
+            R=np.asarray(record["R"], dtype=np.float64),
+            t=np.asarray(record["t"], dtype=np.float64).reshape(3),
+        )
+        for image_name, record in payload["registered_images"].items()
+    }
+    if points_path.exists():
+        point_data = np.load(points_path)
+        points3d = point_data["points3D"].astype(np.float64)
+        colors = point_data["colors"].astype(np.uint8)
+    else:
+        initial_points = np.load(sparse_dir / "initial_points.npz")
+        points3d = initial_points["points3D"].astype(np.float64)
+        colors = initial_points["colors"].astype(np.uint8)
+
+    return ReconstructionState(
+        registered_images=registered_images,
+        points3d=points3d,
+        colors=colors,
+        observations=list(payload.get("observations", [])),
     )
 
 
@@ -263,6 +296,7 @@ def save_reconstruction_state(state: ReconstructionState, sparse_dir: Path) -> t
     sparse_dir.mkdir(parents=True, exist_ok=True)
     state_path = sparse_dir / "reconstruction_state.json"
     registered_npz_path = sparse_dir / "registered_images.npz"
+    points_npz_path = sparse_dir / "reconstruction_points.npz"
     payload = {
         "registered_images": {
             image_name: {
@@ -276,8 +310,6 @@ def save_reconstruction_state(state: ReconstructionState, sparse_dir: Path) -> t
         "num_observations": len(state.observations),
         "observations": state.observations,
     }
-    import json
-
     state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     image_names = np.array(list(state.registered_images.keys()))
     rotations = np.stack([registered.R for registered in state.registered_images.values()])
@@ -289,5 +321,10 @@ def save_reconstruction_state(state: ReconstructionState, sparse_dir: Path) -> t
         rotations=rotations,
         translations=translations,
         centers=centers,
+    )
+    np.savez_compressed(
+        points_npz_path,
+        points3D=state.points3d.astype(np.float64),
+        colors=state.colors.astype(np.uint8),
     )
     return state_path, registered_npz_path

@@ -14,7 +14,7 @@ from src.sfm.matching import load_features
 from src.sfm.reconstruction import (
     add_registered_image,
     collect_candidate_correspondences,
-    load_initial_state,
+    load_reconstruction_state,
     register_image_pnp,
     save_reconstruction_state,
 )
@@ -43,7 +43,7 @@ def main() -> int:
     report_dir.mkdir(parents=True, exist_ok=True)
     figure_dir.mkdir(parents=True, exist_ok=True)
 
-    state = load_initial_state(sparse_dir)
+    state = load_reconstruction_state(sparse_dir)
     images = list_images(image_dir)
     features_by_name = {
         image_path.name: load_features(feature_dir / f"{image_path.stem}.npz")
@@ -62,6 +62,9 @@ def main() -> int:
 
     max_reproj_error = float(default["sfm"].get("max_reproj_error_px", 8.0))
     pnp_confidence = float(default["sfm"].get("ransac_confidence", 0.999))
+    initial_registered_images = len(state.registered_images)
+    initial_points3d = int(state.points3d.shape[0])
+    initial_observations = len(state.observations)
     failed_images: set[str] = set()
     registrations = []
 
@@ -111,11 +114,15 @@ def main() -> int:
 
     report = {
         "scene_name": scene["scene_name"],
-        "initial_registered_images": 2,
+        "initial_registered_images": initial_registered_images,
         "final_registered_images": len(state.registered_images),
         "attempted_images": len(registrations),
         "successful_registrations": sum(1 for item in registrations if item["status"] == "registered"),
         "failed_registrations": sum(1 for item in registrations if item["status"] != "registered"),
+        "initial_points3D": initial_points3d,
+        "final_points3D": int(state.points3d.shape[0]),
+        "initial_observations": initial_observations,
+        "final_observations": len(state.observations),
         "state_path": str(state_path),
         "registered_npz_path": str(registered_npz_path),
         "per_image": registrations,
