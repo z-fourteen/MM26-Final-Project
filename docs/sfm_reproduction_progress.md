@@ -1002,3 +1002,155 @@ Phase 6B Registered-track Triangulation
 ```
 
 目标是利用当前 10 张已注册图像重新三角化，扩展点云覆盖范围，然后继续 Phase 5C 注册。
+
+---
+
+## 15. Phase 6B Robust Registered-track Triangulation after Phase 5C
+
+### 15.1 执行动机
+
+Phase 5C 基于 Phase 4B 初始化完成后，注册图像从 2 张增加到 10 张，但停止于剩余候选不足 `min_2d3d = 30`。这说明当前点云覆盖范围仍然不足，需要利用已经注册的 10 张图像从 feature tracks 中恢复更多 3D 点。
+
+这与论文中的 incremental SfM 闭环一致：
+
+```text
+image registration
+  -> triangulation
+  -> more 2D-3D correspondences
+  -> more image registration
+```
+
+### 15.2 已完成内容
+
+新增/修改代码：
+
+- `src/sfm/triangulation.py`
+  - `robust_triangulate_track` 新增 `valid_pair_mask`，RANSAC 采样只从合法视图对中取两视图。
+- `src/tools/triangulate_registered_tracks.py`
+  - 严格依赖 Phase 3B verified schema。
+  - 构建 tracks 时只使用：
+
+```text
+status in {verified, verified_planar}
+model_type not in {panoramic, rejected_wtf}
+```
+
+  - RANSAC 采样时同样检查 observation pair 是否来自合法 Phase 3B 边。
+  - 报告新增 used/skipped edges、edge status/model type counts、ambiguous/conflicting/no-valid-pair 等跳过原因。
+
+### 15.3 运行命令
+
+```bash
+conda run -n mm26 python -m src.tools.triangulate_registered_tracks \
+  --scene configs/scenes/south_building_small.yaml
+```
+
+### 15.4 验收结果
+
+Phase 6B 从 Phase 5C 的 10 张注册图像出发：
+
+```text
+Registered images: 10
+Input registered edges used: 43
+Input registered edges skipped: 2
+Input tracks: 4372
+
+Points3D: 1775 -> 3930
+Observations: 5210 -> 11279
+New points3D: 2155
+New observations: 6069
+Augmented existing observations: 805
+```
+
+几何质量：
+
+```text
+Median / mean new point reprojection error: 0.988 / 1.773 px
+Median / mean new point triangulation angle: 5.759 / 9.607 deg
+```
+
+跳过统计：
+
+```text
+skipped_ambiguous_tracks: 15
+skipped_conflicting_point_tracks: 0
+skipped_no_valid_view_pair_tracks: 0
+skipped_geometry_tracks: 434
+```
+
+使用边统计：
+
+```text
+edge_status_counts:
+  verified: 17
+  verified_planar: 26
+  low_inliers: 1
+  too_few_matches: 1
+
+edge_model_type_counts:
+  general: 17
+  planar: 26
+  unverified: 2
+```
+
+没有使用 panoramic pair 进行三角化，符合论文中避免从 panoramic image pairs triangulate 的原则。
+
+### 15.5 Phase 6B 后续 Phase 5C 验证
+
+扩点后继续运行 Phase 5C：
+
+```bash
+conda run -n mm26 python -m src.tools.register_images \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-register 20 \
+  --min-2d3d 30 \
+  --min-pnp-inliers 20 \
+  --visibility-levels 3 \
+  --top-candidates 5
+```
+
+结果：
+
+```text
+Registered images: 10 -> 16
+Successful new registrations: 6
+Failed attempts: 1
+Observations: 11279 -> 11517
+```
+
+新增注册图像：
+
+```text
+P1180146.JPG  num_2d3d=99   inliers=34  mean_error=3.276 px
+P1180153.JPG  num_2d3d=141  inliers=77  mean_error=3.631 px
+P1180147.JPG  num_2d3d=75   inliers=58  mean_error=2.114 px
+P1180154.JPG  num_2d3d=50   inliers=20  mean_error=2.653 px
+P1180156.JPG  num_2d3d=40   inliers=26  mean_error=3.388 px
+P1180157.JPG  num_2d3d=33   inliers=23  mean_error=9.013 px
+```
+
+失败图像：
+
+```text
+P1180155.JPG  pnp_failed  num_2d3d=32
+```
+
+### 15.6 当前结论
+
+Phase 6B 扩点有效缓解了 Phase 5C 的 `not_enough_2d3d` 瓶颈，使注册图像数量继续从 10 张增加到 16 张。
+
+当前需要注意：
+
+- `P1180157.JPG` 虽然注册成功，但 mean reprojection error 约 9 px，质量偏低。
+- 后续需要更严格的 registration acceptance 或 Phase 7 BA/filtering 清理低质量注册。
+- 当前还没有执行 BA，因此 16 张图像后的位姿和点云仍可能存在累计误差。
+
+下一步建议：
+
+```text
+Phase 6C / Phase 5C loop
+  或
+Phase 7 Local Bundle Adjustment + filtering
+```
+
+如果目标是继续增加注册图像数量，可以先再执行一轮 Phase 6B -> Phase 5C；如果目标是稳定质量，应进入 Phase 7 BA。

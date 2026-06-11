@@ -28,6 +28,16 @@ class TrackObservation:
     keypoint_idx: int
 
 
+@dataclass(frozen=True)
+class TrackBuildResult:
+    tracks: list[list[TrackObservation]]
+    valid_edges: set[tuple[str, str]]
+    edge_status_counts: dict[str, int]
+    edge_model_type_counts: dict[str, int]
+    used_edges: int
+    skipped_edges: int
+
+
 class UnionFind:
     def __init__(self) -> None:
         self.parent: dict[TrackObservation, TrackObservation] = {}
@@ -69,22 +79,62 @@ def sample_color(image_rgb: np.ndarray, point2d: np.ndarray) -> np.ndarray:
     return image_rgb[y, x].astype(np.uint8)
 
 
-def build_registered_tracks(verified_dir: Path, registered_names: set[str]) -> list[list[TrackObservation]]:
+def build_registered_tracks(verified_dir: Path, registered_names: set[str]) -> TrackBuildResult:
     union_find = UnionFind()
+    valid_edges: set[tuple[str, str]] = set()
+    edge_status_counts: dict[str, int] = {}
+    edge_model_type_counts: dict[str, int] = {}
+    used_edges = 0
+    skipped_edges = 0
     for verified_path in sorted(verified_dir.glob("*.npz")):
         data = np.load(verified_path)
-        if str(data["status"]) != "verified":
-            continue
         image_name1 = str(data["image_name1"])
         image_name2 = str(data["image_name2"])
         if image_name1 not in registered_names or image_name2 not in registered_names:
             continue
+        for required_field in ("status", "model_type", "inlier_matches", "homography_ratio"):
+            if required_field not in data:
+                raise KeyError(f"Phase 6B requires field '{required_field}' in {verified_path}")
+        status = str(data["status"])
+        model_type = str(data["model_type"])
+        edge_status_counts[status] = edge_status_counts.get(status, 0) + 1
+        edge_model_type_counts[model_type] = edge_model_type_counts.get(model_type, 0) + 1
+        if status not in {"verified", "verified_planar"} or model_type in {"panoramic", "rejected_wtf"}:
+            skipped_edges += 1
+            continue
+        used_edges += 1
+        valid_edges.add(pair_key(image_name1, image_name2))
         matches = data["inlier_matches"].astype(np.int32)
         for keypoint_idx1, keypoint_idx2 in matches:
             obs1 = TrackObservation(image_name1, int(keypoint_idx1))
             obs2 = TrackObservation(image_name2, int(keypoint_idx2))
             union_find.union(obs1, obs2)
-    return union_find.groups()
+    return TrackBuildResult(
+        tracks=union_find.groups(),
+        valid_edges=valid_edges,
+        edge_status_counts=edge_status_counts,
+        edge_model_type_counts=edge_model_type_counts,
+        used_edges=used_edges,
+        skipped_edges=skipped_edges,
+    )
+
+
+def pair_key(image_name1: str, image_name2: str) -> tuple[str, str]:
+    return tuple(sorted((image_name1, image_name2)))
+
+
+def valid_pair_mask_for_observations(
+    observations: list[TrackObservation],
+    valid_edges: set[tuple[str, str]],
+) -> np.ndarray:
+    num_observations = len(observations)
+    mask = np.zeros((num_observations, num_observations), dtype=bool)
+    for idx1 in range(num_observations):
+        for idx2 in range(idx1 + 1, num_observations):
+            if pair_key(observations[idx1].image_name, observations[idx2].image_name) in valid_edges:
+                mask[idx1, idx2] = True
+                mask[idx2, idx1] = True
+    return mask
 
 
 def add_observation_if_missing(
@@ -149,7 +199,8 @@ def main() -> int:
         image_name: projection_matrix(cameras[image_name].K, registered.R, registered.t)
         for image_name, registered in state.registered_images.items()
     }
-    tracks = build_registered_tracks(verified_dir, registered_names)
+    track_build = build_registered_tracks(verified_dir, registered_names)
+    tracks = track_build.tracks
     existing = observation_lookup(state)
 
     max_reproj_error_px = float(default["sfm"].get("max_reproj_error_px", 8.0))
@@ -164,8 +215,10 @@ def main() -> int:
     new_point_errors: list[float] = []
     new_point_angles: list[float] = []
     augmented_observations = 0
-    skipped_existing_conflict = 0
+    skipped_ambiguous_tracks = 0
+    skipped_conflicting_point_tracks = 0
     skipped_short = 0
+    skipped_no_valid_view_pair = 0
     skipped_geometry = 0
 
     for track in tqdm(tracks, desc=f"Triangulating {scene['scene_name']}"):
@@ -177,7 +230,7 @@ def main() -> int:
                 break
             unique_by_image[observation.image_name] = observation
         if ambiguous:
-            skipped_existing_conflict += 1
+            skipped_ambiguous_tracks += 1
             continue
         observations = sorted(unique_by_image.values(), key=lambda item: item.image_name)
         if len(observations) < min_track_length:
@@ -190,7 +243,7 @@ def main() -> int:
             if (observation.image_name, observation.keypoint_idx) in existing
         }
         if len(linked_point_ids) > 1:
-            skipped_existing_conflict += 1
+            skipped_conflicting_point_tracks += 1
             continue
         if len(linked_point_ids) == 1:
             point3d_id = next(iter(linked_point_ids))
@@ -206,6 +259,10 @@ def main() -> int:
             ]
         )
         image_names = [observation.image_name for observation in observations]
+        valid_pair_mask = valid_pair_mask_for_observations(observations, track_build.valid_edges)
+        if not np.any(np.triu(valid_pair_mask, k=1)):
+            skipped_no_valid_view_pair += 1
+            continue
         result = robust_triangulate_track(
             projection_matrices=[projections[image_name] for image_name in image_names],
             rotations=[state.registered_images[image_name].R for image_name in image_names],
@@ -216,6 +273,7 @@ def main() -> int:
             min_triangulation_angle_deg=min_angle_deg,
             min_track_length=min_track_length,
             max_pair_samples=args.max_pair_samples,
+            valid_pair_mask=valid_pair_mask,
         )
         if result is None:
             skipped_geometry += 1
@@ -245,6 +303,10 @@ def main() -> int:
     report = {
         "scene_name": scene["scene_name"],
         "registered_images": len(state.registered_images),
+        "input_edges_used": track_build.used_edges,
+        "input_edges_skipped": track_build.skipped_edges,
+        "edge_status_counts": track_build.edge_status_counts,
+        "edge_model_type_counts": track_build.edge_model_type_counts,
         "input_tracks": len(tracks),
         "initial_points3D": initial_points,
         "final_points3D": int(state.points3d.shape[0]),
@@ -254,7 +316,9 @@ def main() -> int:
         "new_observations": int(len(state.observations) - initial_observations),
         "augmented_existing_observations": int(augmented_observations),
         "skipped_short_tracks": int(skipped_short),
-        "skipped_conflicting_tracks": int(skipped_existing_conflict),
+        "skipped_ambiguous_tracks": int(skipped_ambiguous_tracks),
+        "skipped_conflicting_point_tracks": int(skipped_conflicting_point_tracks),
+        "skipped_no_valid_view_pair_tracks": int(skipped_no_valid_view_pair),
         "skipped_geometry_tracks": int(skipped_geometry),
         "median_new_point_reprojection_error": float(np.median(new_point_errors)) if new_point_errors else 0.0,
         "mean_new_point_reprojection_error": float(np.mean(new_point_errors)) if new_point_errors else 0.0,

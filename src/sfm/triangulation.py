@@ -89,6 +89,7 @@ def robust_triangulate_track(
     min_triangulation_angle_deg: float,
     min_track_length: int,
     max_pair_samples: int = 100,
+    valid_pair_mask: np.ndarray | None = None,
 ) -> TriangulatedTrack | None:
     num_observations = int(points2d.shape[0])
     if num_observations < max(2, min_track_length):
@@ -101,7 +102,17 @@ def robust_triangulate_track(
         ]
     )
 
-    pairs = list(combinations(range(num_observations), 2))
+    if valid_pair_mask is not None and valid_pair_mask.shape != (num_observations, num_observations):
+        raise ValueError(
+            f"valid_pair_mask must have shape {(num_observations, num_observations)}, got {valid_pair_mask.shape}"
+        )
+    pairs = [
+        (idx1, idx2)
+        for idx1, idx2 in combinations(range(num_observations), 2)
+        if valid_pair_mask is None or bool(valid_pair_mask[idx1, idx2])
+    ]
+    if not pairs:
+        return None
     if len(pairs) > max_pair_samples:
         pairs = pairs[:max_pair_samples]
 
