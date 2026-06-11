@@ -2242,3 +2242,183 @@ post_ba_rt_new_points 是否下降
 final_filtering_removed_observations 是否下降
 final residual 是否稳定
 ```
+
+---
+
+## 22. Phase 7F Conservative Track Merge
+
+### 22.1 执行动机
+
+论文 4.4 在 post-BA RT 中明确提到：
+
+```text
+attempt to merge tracks
+thereby provide increased redundancy for the next BA step
+```
+
+Phase 7E 自动迭代显示，单纯增加 BA/RT/filtering 迭代次数不能让系统收敛：
+
+```text
+post-BA RT new points 仍为 225
+final filtering removed observations 仍约 739
+```
+
+因此本阶段先实现保守 track merge，处理同一个 feature track 已经连接到多个 `point3D_id` 的冲突情况。
+
+### 22.2 已完成内容
+
+修改代码：
+
+- `src/tools/triangulate_registered_tracks.py`
+  - 新增 `--enable-track-merge`。
+  - 对 `linked_point_ids > 1` 的 conflicting track 尝试合并。
+  - 合并前检查：
+    - 合并后每张图像最多一个 observation。
+    - 合并后 track length 满足阈值。
+    - 合并后存在合法 Phase 3B verified view pair。
+    - 合并后可通过 robust triangulation 几何验证。
+  - 合并成功后：
+    - 保留最小 `point3D_id`。
+    - 用重新三角化的点更新该 point3D。
+    - 将其他 point 的 observations 迁移到保留点。
+    - 更新 observation lookup。
+  - report 新增：
+    - `track_merge_enabled`
+    - `merged_tracks`
+    - `rejected_merge_same_image_conflict`
+    - `rejected_merge_short`
+    - `rejected_merge_no_valid_pair`
+    - `rejected_merge_geometry`
+
+当前实现是保守 merge，不做大范围 track graph 重写。
+
+### 22.3 运行命令
+
+Baseline residual：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name phase7f_registered_residual_baseline_report.json
+```
+
+post-BA RT with track merge：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.triangulate_registered_tracks \
+  --scene configs/scenes/south_building_small.yaml \
+  --stage post_ba_rt \
+  --residual-report outputs\south_building_small\reports\phase7f_registered_residual_baseline_report.json \
+  --max-observation-error 8.0 \
+  --enable-track-merge \
+  --report-name phase7f_post_ba_rt_with_merge_report.json
+```
+
+Merge 后 BA/filtering 验证：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --scope global \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 1200 \
+  --max-observations 6000 \
+  --min-track-length 2 \
+  --report-name phase7f_global_ba_after_merge_report.json
+
+D:\06_envs\mm26\python.exe -m src.tools.filter_reconstruction \
+  --scene configs/scenes/south_building_small.yaml \
+  --ba-report outputs\south_building_small\reports\phase7f_registered_residual_after_merge_ba_report.json \
+  --max-reprojection-error 8.0 \
+  --max-point-median-error 8.0 \
+  --max-point-max-error 32.0 \
+  --min-track-length 2 \
+  --report-name phase7f_filtering_after_merge_ba_report.json
+```
+
+### 22.4 验收结果
+
+Baseline：
+
+```text
+Points3D: 4375
+Observations: 12469
+Mean residual:   1.798 px
+Median residual: 1.269 px
+P95 residual:    5.635 px
+Observations > 8 px: 0
+```
+
+post-BA RT with merge：
+
+```text
+Points3D: 4375 -> 4506
+Observations: 12469 -> 13737
+New points3D: 131
+New observations: 1268
+Augmented existing observations: 940
+Merged tracks: 7
+Skipped conflicting point tracks: 0
+Rejected merge same-image conflict: 0
+Rejected merge short: 0
+Rejected merge no valid pair: 0
+Rejected merge geometry: 0
+New point reprojection error median/mean: 2.365 / 2.858 px
+```
+
+Merge 后 BA/filtering：
+
+```text
+After BA:
+Mean registered residual:   4.587 px
+Median registered residual: 1.418 px
+P95 registered residual:    15.602 px
+Observations > 8 px:        996
+
+Filtering:
+Observations: 13737 -> 12178
+Points3D: 4506 -> 4265
+Removed observations by reprojection: 996
+Removed points total: 241
+
+Final registered residual:
+Mean residual:   1.772 px
+Median residual: 1.268 px
+P95 residual:    5.448 px
+Observations > 8 px: 0
+```
+
+### 22.5 当前结论
+
+Track merge 第一版有效解决了 conflicting point tracks：
+
+```text
+merged_tracks = 7
+skipped_conflicting_point_tracks = 0
+```
+
+同时 post-BA RT 新增点数从 Phase 7E 第 2 轮的 `225` 降到 `131`，说明 merge 和当前状态确实减少了一部分重复/冲突点生成。
+
+但 merge 并没有解决主要收敛瓶颈：
+
+```text
+filtering removed observations = 996
+```
+
+这说明当前 BA/RT/filtering 循环中的主要压力不是 conflicting tracks，而是 RT 仍会添加大量后续被判为高 residual 的 observations。
+
+下一步不建议立刻做 intrinsic refinement。更合理的是：
+
+```text
+Phase 7G Stricter RT Continuation / Acceptance
+```
+
+候选改进：
+
+- post-BA RT 使用更严格的 `max_reproj_error_px`，例如 4px 而不是 8px。
+- 对 augmented existing observations 也做即时 reprojection check，而不是只依赖后续 filtering。
+- 新点接受时增加 median/max reprojection error 双阈值。
+- 对 post-BA RT 单独设置更高的 min track length 或 min triangulation angle。
+- 将 RT 新增 observations 的质量统计加入自动控制器停止条件。

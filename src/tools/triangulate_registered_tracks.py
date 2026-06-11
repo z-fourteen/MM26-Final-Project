@@ -168,6 +168,91 @@ def add_observation_if_missing(
     return True
 
 
+def track_observations_for_point(state: ReconstructionState, point3d_id: int) -> list[TrackObservation]:
+    return [
+        TrackObservation(str(observation["image_name"]), int(observation["keypoint_idx"]))
+        for observation in state.observations
+        if int(observation["point3D_id"]) == int(point3d_id)
+    ]
+
+
+def try_merge_conflicting_points(
+    state: ReconstructionState,
+    existing: dict[tuple[str, int], int],
+    linked_point_ids: set[int],
+    track_observations: list[TrackObservation],
+    projections: dict[str, np.ndarray],
+    cameras: dict[str, object],
+    keypoints_by_name: dict[str, np.ndarray],
+    valid_edges: set[tuple[str, str]],
+    max_reproj_error_px: float,
+    min_angle_deg: float,
+    min_track_length: int,
+    max_pair_samples: int,
+) -> tuple[bool, str]:
+    merged_by_key: dict[tuple[str, int], TrackObservation] = {}
+    for point3d_id in sorted(linked_point_ids):
+        for observation in track_observations_for_point(state, point3d_id):
+            merged_by_key[(observation.image_name, observation.keypoint_idx)] = observation
+    for observation in track_observations:
+        merged_by_key[(observation.image_name, observation.keypoint_idx)] = observation
+
+    image_names_seen = set()
+    observations = []
+    for observation in sorted(merged_by_key.values(), key=lambda item: (item.image_name, item.keypoint_idx)):
+        if observation.image_name in image_names_seen:
+            return False, "same_image_conflict"
+        image_names_seen.add(observation.image_name)
+        observations.append(observation)
+    if len(observations) < min_track_length:
+        return False, "short_after_merge"
+
+    valid_pair_mask = valid_pair_mask_for_observations(observations, valid_edges)
+    if not np.any(np.triu(valid_pair_mask, k=1)):
+        return False, "no_valid_view_pair"
+
+    points2d = np.stack(
+        [
+            keypoints_by_name[observation.image_name][observation.keypoint_idx, :2].astype(np.float64)
+            for observation in observations
+        ]
+    )
+    image_names = [observation.image_name for observation in observations]
+    result = robust_triangulate_track(
+        projection_matrices=[projections[image_name] for image_name in image_names],
+        rotations=[state.registered_images[image_name].R for image_name in image_names],
+        translations=[state.registered_images[image_name].t for image_name in image_names],
+        intrinsics=[cameras[image_name].K for image_name in image_names],
+        points2d=points2d,
+        max_reproj_error_px=max_reproj_error_px,
+        min_triangulation_angle_deg=min_angle_deg,
+        min_track_length=min_track_length,
+        max_pair_samples=max_pair_samples,
+        valid_pair_mask=valid_pair_mask,
+    )
+    if result is None:
+        return False, "geometry"
+
+    keep_point_id = min(int(point_id) for point_id in linked_point_ids)
+    state.points3d[keep_point_id] = result.point3d.astype(np.float64)
+    state.colors[keep_point_id] = median_color_for_points(state, linked_point_ids)
+    removed_point_ids = set(int(point_id) for point_id in linked_point_ids if int(point_id) != keep_point_id)
+
+    for observation in state.observations:
+        if int(observation["point3D_id"]) in removed_point_ids:
+            observation["point3D_id"] = int(keep_point_id)
+    for observation in observations:
+        key = (observation.image_name, observation.keypoint_idx)
+        existing[key] = int(keep_point_id)
+        add_observation_if_missing(state, existing, keep_point_id, observation)
+    return True, "merged"
+
+
+def median_color_for_points(state: ReconstructionState, point_ids: set[int]) -> np.ndarray:
+    colors = state.colors[np.asarray(sorted(point_ids), dtype=np.int32)].astype(np.float64)
+    return np.median(colors, axis=0).astype(np.uint8)
+
+
 def load_blocked_observations_from_residual_report(
     report_path: Path,
     max_observation_error: float,
@@ -200,6 +285,7 @@ def main() -> int:
     parser.add_argument("--residual-report", default="", help="Residual report used to gate post-BA RT observations.")
     parser.add_argument("--max-observation-error", type=float, default=8.0)
     parser.add_argument("--report-name", default="triangulation_report.json")
+    parser.add_argument("--enable-track-merge", action="store_true")
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -275,6 +361,11 @@ def main() -> int:
     skipped_no_valid_view_pair = 0
     skipped_geometry = 0
     skipped_observations_by_residual = 0
+    merged_tracks = 0
+    rejected_merge_same_image_conflict = 0
+    rejected_merge_short = 0
+    rejected_merge_no_valid_pair = 0
+    rejected_merge_geometry = 0
 
     for track in tqdm(tracks, desc=f"Triangulating {scene['scene_name']}"):
         unique_by_image: dict[str, TrackObservation] = {}
@@ -298,6 +389,32 @@ def main() -> int:
             if (observation.image_name, observation.keypoint_idx) in existing
         }
         if len(linked_point_ids) > 1:
+            if args.enable_track_merge:
+                merged, reason = try_merge_conflicting_points(
+                    state=state,
+                    existing=existing,
+                    linked_point_ids=linked_point_ids,
+                    track_observations=observations,
+                    projections=projections,
+                    cameras=cameras,
+                    keypoints_by_name=keypoints_by_name,
+                    valid_edges=track_build.valid_edges,
+                    max_reproj_error_px=max_reproj_error_px,
+                    min_angle_deg=min_angle_deg,
+                    min_track_length=min_track_length,
+                    max_pair_samples=args.max_pair_samples,
+                )
+                if merged:
+                    merged_tracks += 1
+                    continue
+                if reason == "same_image_conflict":
+                    rejected_merge_same_image_conflict += 1
+                elif reason == "short_after_merge":
+                    rejected_merge_short += 1
+                elif reason == "no_valid_view_pair":
+                    rejected_merge_no_valid_pair += 1
+                elif reason == "geometry":
+                    rejected_merge_geometry += 1
             skipped_conflicting_point_tracks += 1
             continue
         if len(linked_point_ids) == 1:
@@ -385,7 +502,13 @@ def main() -> int:
         "skipped_no_valid_view_pair_tracks": int(skipped_no_valid_view_pair),
         "skipped_geometry_tracks": int(skipped_geometry),
         "skipped_observations_by_residual": int(skipped_observations_by_residual),
-        "track_merge_implemented": False,
+        "track_merge_implemented": True,
+        "track_merge_enabled": bool(args.enable_track_merge),
+        "merged_tracks": int(merged_tracks),
+        "rejected_merge_same_image_conflict": int(rejected_merge_same_image_conflict),
+        "rejected_merge_short": int(rejected_merge_short),
+        "rejected_merge_no_valid_pair": int(rejected_merge_no_valid_pair),
+        "rejected_merge_geometry": int(rejected_merge_geometry),
         "median_new_point_reprojection_error": float(np.median(new_point_errors)) if new_point_errors else 0.0,
         "mean_new_point_reprojection_error": float(np.mean(new_point_errors)) if new_point_errors else 0.0,
         "median_new_point_angle_deg": float(np.median(new_point_angles)) if new_point_angles else 0.0,
