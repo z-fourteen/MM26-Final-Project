@@ -1154,3 +1154,115 @@ Phase 7 Local Bundle Adjustment + filtering
 ```
 
 如果目标是继续增加注册图像数量，可以先再执行一轮 Phase 6B -> Phase 5C；如果目标是稳定质量，应进入 Phase 7 BA。
+
+---
+
+## 16. Phase 7A Small-scale Bundle Adjustment
+
+### 16.1 执行动机
+
+Phase 5C/6B 闭环已经将 `south_building_small` 推进到 16 张已注册图像，但新增图像中已经出现较高重投影误差，例如 `P1180157.JPG` 的 mean reprojection error 约 9 px。继续盲目执行 Phase 5C/6B 会放大位姿累计误差，因此本阶段先实现一个小规模 BA 验证版，用于稳定当前局部重建并为后续 filtering / 论文级 BA 做准备。
+
+本阶段定位为：
+
+```text
+fixed intrinsics
+fixed first camera pose as gauge
+optimize remaining camera poses + selected 3D points
+robust least-squares
+```
+
+固定第一张图像的 `R/t` 是为了消除 SfM 的 gauge freedom：整体坐标系可以任意刚体变换和尺度缩放，如果不固定参考相机，BA 的解不唯一，优化器会在等价坐标系中漂移。
+
+### 16.2 已完成内容
+
+新增代码：
+
+- `src/sfm/bundle_adjustment.py`
+  - 新增 BA problem 构建。
+  - 使用 Rodrigues 向量参数化相机旋转。
+  - 固定首张已注册图像的 pose，不放入优化变量。
+  - 优化其余 registered image poses 和选中的 `points3D`。
+  - 使用 `scipy.optimize.least_squares` 和 Cauchy robust loss。
+  - 显式构建 bundle adjustment sparsity pattern，避免密集有限差分导致运行过慢。
+- `src/tools/run_bundle_adjustment.py`
+  - 新增 Phase 7A 命令行工具。
+  - 支持 `--max-points`、`--max-observations`、`--max-iterations`、`--loss`、`--f-scale`。
+  - 自动备份 BA 前状态到 `*_before_ba.*`。
+  - 写出 `bundle_adjustment_report.json`。
+
+### 16.3 运行命令
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 800 \
+  --max-observations 3000 \
+  --min-track-length 2
+```
+
+### 16.4 验收结果
+
+本轮 BA 从 Phase 6B + Phase 5C 后的 16-image reconstruction state 出发：
+
+```text
+Fixed image: P1180142.JPG
+Registered images: 16
+Optimized cameras: 15
+Total points3D: 3930
+Optimized points3D: 545
+Total observations: 11517
+Optimized observations: 3000
+Loss: cauchy
+f_scale: 4.0
+Function evaluations: 40
+Optimizer status: max function evaluations exceeded
+```
+
+误差变化：
+
+```text
+Median reprojection error: 1.859 -> 1.555 px
+Mean reprojection error:   4.760 -> 4.540 px
+Observations > 8 px:       180 -> 178
+Observations > 16 px:      144 -> 144
+```
+
+输出文件：
+
+```text
+outputs/south_building_small/reports/bundle_adjustment_report.json
+data/scenes/south_building_small/sparse/0/reconstruction_state.json
+data/scenes/south_building_small/sparse/0/reconstruction_points.npz
+data/scenes/south_building_small/sparse/0/registered_images.npz
+```
+
+BA 前备份：
+
+```text
+data/scenes/south_building_small/sparse/0/reconstruction_state_before_ba.json
+data/scenes/south_building_small/sparse/0/reconstruction_points_before_ba.npz
+data/scenes/south_building_small/sparse/0/registered_images_before_ba.npz
+```
+
+### 16.5 当前结论
+
+Phase 7A 已经证明当前 reconstruction state 可以进入 bundle adjustment，并且在小规模稀疏 BA 下重投影误差有下降。由于本轮仍达到 `max_nfev` 上限，且离群观测数量基本未变，说明 BA 本身不能替代 outlier filtering。
+
+下一步建议进入：
+
+```text
+Phase 7B BA-based filtering
+```
+
+优先处理：
+
+- 按 BA 后 reprojection error 过滤高误差 observations / points。
+- 按 track length 和 triangulation angle 过滤弱几何点。
+- 对 `P1180157.JPG` 等低质量注册图像做质量复核。
+- 过滤后再执行一轮局部 BA，比较误差和后续 Phase 5C 注册能力。
+
+论文级别的完整 BA 可以作为 Phase 7C 实现，并在数学建模报告中与 Phase 7A 简化版形成对照：简化版用于解释核心优化思想，论文级版本用于展示更完整的鲁棒性和工程效果。
