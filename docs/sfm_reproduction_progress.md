@@ -784,3 +784,119 @@ Phase 4B robust initialization
 ```
 
 建议下一步先重新运行 Phase 4 初始化，比较新旧初始 pair 的点云保留率和重投影误差，再决定是否继续补 Phase 4B scoring。
+
+---
+
+## 13. Phase 4B Robust Two-view Initialization
+
+### 13.1 执行动机
+
+Phase 3B 已经为 scene graph 边补充了 `model_type`、`calibration_status`、`homography_ratio`、`essential_ratio`、`median_triangulation_angle_deg` 等属性，因此初始化不应再只按 `num_inliers * inlier_ratio` 选择 pair。
+
+本轮将 Phase 4 升级为：
+
+```text
+Phase 3B scene graph
+  -> candidate ranking
+  -> top-k initialization attempts
+  -> quality checks
+  -> selected robust two-view seed
+```
+
+### 13.2 已完成内容
+
+新增/修改代码：
+
+- `configs/default.yaml`
+  - 新增 `min_initial_points`、`min_initial_kept_ratio`、`max_initial_median_reproj_error_px`。
+- `src/sfm/initialization.py`
+  - 新增 `rank_initial_pair_candidates`。
+  - 初始化候选排除 `panoramic / rejected_wtf / unverified`。
+  - `general` 优先，`planar` 保留但降权。
+  - `calibrated` 加分，`uncertain` 保留但不加分。
+  - score 综合使用 inliers、inlier ratio、homography ratio、essential ratio、triangulation angle、graph degree。
+  - 新增初始化质量指标：pose inliers、kept ratio、cheirality ratio、初始化后三角化角。
+  - 重新初始化时自动清理旧的 `reconstruction_state.json`、`registered_images.npz`、`reconstruction_points.npz`。
+- `src/tools/initialize_reconstruction.py`
+  - 新增 `--max-candidate-pairs`。
+  - 输出 `initialization_candidates_report.json`。
+  - 从 top-k 候选中逐个尝试，选择第一个满足质量阈值的 pair。
+
+### 13.3 运行命令
+
+```bash
+conda run -n mm26 python -m src.tools.initialize_reconstruction \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-candidate-pairs 20
+```
+
+### 13.4 验收结果
+
+Phase 4B 选择结果：
+
+```text
+Selected pair: P1180142.JPG <-> P1180143.JPG
+Selected rank: 2 / 20
+status = verified
+model_type = general
+calibration_status = calibrated
+num_inliers = 1775
+inlier_ratio = 0.981
+homography_ratio = 0.550
+essential_ratio = 1.004
+Phase3B median triangulation angle = 2.187 deg
+graph_degree_score = 10.954
+```
+
+初始化三角化结果：
+
+```text
+Candidate points: 1775
+Kept points: 1775
+Kept ratio: 1.000
+Pose inliers: 1756
+Cheirality ratio: 1.000
+Median initialization triangulation angle: 2.248 deg
+Median / mean reprojection error: 1.609 / 1.710 px
+Baseline norm: 1.0
+```
+
+对比旧 Phase 4：
+
+```text
+Old selected pair: P1180189.JPG <-> P1180190.JPG
+Old points candidate/kept: 3635 / 697
+Old median / mean reprojection error: 6.790 / 6.178 px
+
+New selected pair: P1180142.JPG <-> P1180143.JPG
+New points candidate/kept: 1775 / 1775
+New median / mean reprojection error: 1.609 / 1.710 px
+```
+
+Phase 4B 明显改善了初始化点云质量：保留点更多，重投影误差显著降低。
+
+### 13.5 当前状态影响
+
+由于 Phase 4B 已重新生成：
+
+```text
+data/scenes/south_building_small/sparse/0/initial_pair.npz
+data/scenes/south_building_small/sparse/0/initial_points.npz
+```
+
+并清理了旧的增量状态：
+
+```text
+reconstruction_state.json
+registered_images.npz
+reconstruction_points.npz
+```
+
+因此旧 Phase 5/6 的 21-image reconstruction state 已失效。下一步应基于新的 Phase 4B 初始化重新运行：
+
+```text
+Phase 5B incremental registration
+Phase 6B registered-track triangulation
+```
+
+这样才能评估更强前端初始化对完整增量重建链路的真实影响。
