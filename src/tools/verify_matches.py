@@ -8,12 +8,13 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
+from src.sfm.camera import estimate_simple_pinhole
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
 from src.sfm.geometry import (
     save_verification_result,
     verified_output_path,
-    verify_fundamental_matrix,
+    verify_geometric_models,
 )
 from src.sfm.matching import ImageFeatures, draw_match_preview, load_features
 
@@ -24,13 +25,31 @@ def load_match_paths(match_dir: Path) -> list[Path]:
 
 def load_cached_verification(verified_path: Path) -> dict:
     data = np.load(verified_path)
+    num_inliers = int(data["num_inliers"])
+    num_h_inliers = int(data["num_h_inliers"]) if "num_h_inliers" in data else 0
+    num_e_inliers = int(data["num_e_inliers"]) if "num_e_inliers" in data else 0
+    num_s_inliers = int(data["num_s_inliers"]) if "num_s_inliers" in data else 0
     return {
         "image_name1": str(data["image_name1"]),
         "image_name2": str(data["image_name2"]),
         "verified_path": str(verified_path),
         "num_raw_matches": int(data["num_raw_matches"]),
-        "num_inliers": int(data["num_inliers"]),
+        "num_inliers": num_inliers,
+        "num_h_inliers": num_h_inliers,
+        "num_e_inliers": num_e_inliers,
+        "num_s_inliers": num_s_inliers,
         "inlier_ratio": float(data["inlier_ratio"]),
+        "h_inlier_ratio": float(data["h_inlier_ratio"]) if "h_inlier_ratio" in data else 0.0,
+        "e_inlier_ratio": float(data["e_inlier_ratio"]) if "e_inlier_ratio" in data else 0.0,
+        "s_inlier_ratio": float(data["s_inlier_ratio"]) if "s_inlier_ratio" in data else 0.0,
+        "homography_ratio": float(data["homography_ratio"]) if "homography_ratio" in data else 0.0,
+        "essential_ratio": float(data["essential_ratio"]) if "essential_ratio" in data else 0.0,
+        "similarity_ratio": float(data["similarity_ratio"]) if "similarity_ratio" in data else 0.0,
+        "median_triangulation_angle_deg": (
+            float(data["median_triangulation_angle_deg"]) if "median_triangulation_angle_deg" in data else 0.0
+        ),
+        "model_type": str(data["model_type"]) if "model_type" in data else "general",
+        "calibration_status": str(data["calibration_status"]) if "calibration_status" in data else "uncertain",
         "status": str(data["status"]),
     }
 
@@ -61,6 +80,7 @@ def main() -> int:
     parser.add_argument("--max-pairs", type=int, default=0, help="Optional cap for debugging; 0 means all pairs.")
     parser.add_argument("--preview-count", type=int, default=3)
     parser.add_argument("--force", action="store_true", help="Recompute existing verified files.")
+    parser.add_argument("--focal-scale", type=float, default=1.2)
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -79,11 +99,23 @@ def main() -> int:
     min_num_matches = int(default["sfm"].get("min_num_matches", 30))
     min_num_inliers = int(default["sfm"].get("min_num_inliers", 30))
     ransac_reproj_threshold_px = float(default["sfm"].get("ransac_reproj_threshold_px", 4.0))
+    homography_reproj_threshold_px = float(default["sfm"].get("homography_reproj_threshold_px", ransac_reproj_threshold_px))
+    essential_reproj_threshold_px = float(default["sfm"].get("essential_reproj_threshold_px", ransac_reproj_threshold_px))
     ransac_confidence = float(default["sfm"].get("ransac_confidence", 0.999))
+    homography_ratio_threshold = float(default["sfm"].get("homography_ratio_threshold", 0.8))
+    essential_ratio_threshold = float(default["sfm"].get("essential_ratio_threshold", 0.6))
+    panoramic_triangulation_angle_deg = float(default["sfm"].get("panoramic_triangulation_angle_deg", 1.0))
+    wtf_border_ratio = float(default["sfm"].get("wtf_border_ratio", 0.1))
+    wtf_similarity_ratio_threshold = float(default["sfm"].get("wtf_similarity_ratio_threshold", 0.7))
 
     images = list_images(image_dir)
     features = [load_features(feature_dir / f"{image_path.stem}.npz") for image_path in images]
     feature_by_name = {feature.image_name: feature for feature in features}
+    cameras = {}
+    for image_path in images:
+        feature_data = np.load(feature_dir / f"{image_path.stem}.npz")
+        width, height = [int(value) for value in feature_data["image_size"]]
+        cameras[image_path.name] = estimate_simple_pinhole(width, height, focal_scale=args.focal_scale)
 
     match_paths = load_match_paths(match_dir)
     if args.max_pairs > 0:
@@ -101,14 +133,23 @@ def main() -> int:
         match_data = np.load(match_path)
         image_name1 = str(match_data["image_name1"])
         image_name2 = str(match_data["image_name2"])
-        result = verify_fundamental_matrix(
+        result = verify_geometric_models(
             match_path=match_path,
             keypoints1=feature_by_name[image_name1].keypoints,
             keypoints2=feature_by_name[image_name2].keypoints,
+            camera1=cameras[image_name1],
+            camera2=cameras[image_name2],
             min_num_matches=min_num_matches,
             min_num_inliers=min_num_inliers,
             ransac_reproj_threshold_px=ransac_reproj_threshold_px,
+            homography_reproj_threshold_px=homography_reproj_threshold_px,
+            essential_reproj_threshold_px=essential_reproj_threshold_px,
             ransac_confidence=ransac_confidence,
+            homography_ratio_threshold=homography_ratio_threshold,
+            essential_ratio_threshold=essential_ratio_threshold,
+            panoramic_triangulation_angle_deg=panoramic_triangulation_angle_deg,
+            wtf_border_ratio=wtf_border_ratio,
+            wtf_similarity_ratio_threshold=wtf_similarity_ratio_threshold,
         )
         save_verification_result(result, verified_path)
         summaries.append(
@@ -118,12 +159,25 @@ def main() -> int:
                 "verified_path": str(verified_path),
                 "num_raw_matches": result.num_raw_matches,
                 "num_inliers": result.num_inliers,
+                "num_h_inliers": result.num_h_inliers,
+                "num_e_inliers": result.num_e_inliers,
+                "num_s_inliers": result.num_s_inliers,
                 "inlier_ratio": result.inlier_ratio,
+                "h_inlier_ratio": result.h_inlier_ratio,
+                "e_inlier_ratio": result.e_inlier_ratio,
+                "s_inlier_ratio": result.s_inlier_ratio,
+                "homography_ratio": result.homography_ratio,
+                "essential_ratio": result.essential_ratio,
+                "similarity_ratio": result.similarity_ratio,
+                "median_triangulation_angle_deg": result.median_triangulation_angle_deg,
+                "model_type": result.model_type,
+                "calibration_status": result.calibration_status,
                 "status": result.status,
             }
         )
 
-    verified_edges = [item for item in summaries if item["status"] == "verified"]
+    scene_graph_statuses = {"verified", "verified_planar", "verified_panoramic"}
+    verified_edges = [item for item in summaries if item["status"] in scene_graph_statuses]
     nodes = [{"image_name": image_path.name} for image_path in images]
     scene_graph = {
         "scene_name": scene["scene_name"],
@@ -135,24 +189,47 @@ def main() -> int:
 
     inlier_counts = np.array([item["num_inliers"] for item in summaries], dtype=np.int32)
     inlier_ratios = np.array([item["inlier_ratio"] for item in summaries], dtype=np.float32)
+    homography_ratios = np.array([item["homography_ratio"] for item in summaries], dtype=np.float32)
+    essential_ratios = np.array([item["essential_ratio"] for item in summaries], dtype=np.float32)
+    triangulation_angles = np.array([item["median_triangulation_angle_deg"] for item in summaries], dtype=np.float32)
     status_counts = {}
+    model_type_counts = {}
+    calibration_status_counts = {}
     for item in summaries:
         status_counts[item["status"]] = status_counts.get(item["status"], 0) + 1
+        model_type_counts[item["model_type"]] = model_type_counts.get(item["model_type"], 0) + 1
+        calibration_status_counts[item["calibration_status"]] = calibration_status_counts.get(item["calibration_status"], 0) + 1
 
     report = {
         "scene_name": scene["scene_name"],
         "num_images": len(images),
         "num_pairs": len(match_paths),
         "num_verified_pairs": len(verified_edges),
-        "status_counts": status_counts,
         "min_inliers": int(inlier_counts.min()) if len(inlier_counts) else 0,
         "mean_inliers": float(inlier_counts.mean()) if len(inlier_counts) else 0.0,
         "max_inliers": int(inlier_counts.max()) if len(inlier_counts) else 0,
         "min_inlier_ratio": float(inlier_ratios.min()) if len(inlier_ratios) else 0.0,
         "mean_inlier_ratio": float(inlier_ratios.mean()) if len(inlier_ratios) else 0.0,
         "max_inlier_ratio": float(inlier_ratios.max()) if len(inlier_ratios) else 0.0,
+        "min_homography_ratio": float(homography_ratios.min()) if len(homography_ratios) else 0.0,
+        "mean_homography_ratio": float(homography_ratios.mean()) if len(homography_ratios) else 0.0,
+        "max_homography_ratio": float(homography_ratios.max()) if len(homography_ratios) else 0.0,
+        "min_essential_ratio": float(essential_ratios.min()) if len(essential_ratios) else 0.0,
+        "mean_essential_ratio": float(essential_ratios.mean()) if len(essential_ratios) else 0.0,
+        "max_essential_ratio": float(essential_ratios.max()) if len(essential_ratios) else 0.0,
+        "median_triangulation_angle_deg": float(np.median(triangulation_angles)) if len(triangulation_angles) else 0.0,
+        "status_counts": status_counts,
+        "model_type_counts": model_type_counts,
+        "calibration_status_counts": calibration_status_counts,
         "ransac_reproj_threshold_px": ransac_reproj_threshold_px,
+        "homography_reproj_threshold_px": homography_reproj_threshold_px,
+        "essential_reproj_threshold_px": essential_reproj_threshold_px,
         "ransac_confidence": ransac_confidence,
+        "homography_ratio_threshold": homography_ratio_threshold,
+        "essential_ratio_threshold": essential_ratio_threshold,
+        "panoramic_triangulation_angle_deg": panoramic_triangulation_angle_deg,
+        "wtf_border_ratio": wtf_border_ratio,
+        "wtf_similarity_ratio_threshold": wtf_similarity_ratio_threshold,
         "pairs": summaries,
     }
     report_path = report_dir / "geometric_verification_report.json"
@@ -175,7 +252,13 @@ def main() -> int:
     print(f"Pairs: {len(match_paths)}")
     print(f"Verified pairs: {len(verified_edges)}")
     print(f"Status counts: {status_counts}")
+    print(f"Model type counts: {model_type_counts}")
+    print(f"Calibration counts: {calibration_status_counts}")
     print(f"Inliers min/mean/max: {report['min_inliers']} / {report['mean_inliers']:.1f} / {report['max_inliers']}")
+    print(
+        "Homography ratio min/mean/max: "
+        f"{report['min_homography_ratio']:.3f} / {report['mean_homography_ratio']:.3f} / {report['max_homography_ratio']:.3f}"
+    )
     print(f"Report: {report_path}")
     print(f"Scene graph: {scene_graph_path}")
     return 0

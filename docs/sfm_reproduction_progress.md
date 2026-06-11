@@ -661,3 +661,125 @@ Phase 7 Bundle Adjustment
 - 使用 Huber 或 Cauchy robust loss。
 - BA 后按 reprojection error / track length / triangulation angle 过滤点。
 - 再重新执行一轮 registration / triangulation，观察 registered images 和误差是否继续改善。
+
+---
+
+## 12. Phase 3B Multi-model Geometric Verification
+
+### 12.1 执行动机
+
+前一版 Phase 3 只使用 Fundamental Matrix + RANSAC，能够过滤明显错误匹配，但与论文 *Structure-from-Motion Revisited* 的 scene graph augmentation 尚未对齐。论文中的 Phase 3 不仅判断图像对是否几何验证通过，还会为 scene graph 边标注几何类型，用于后续初始化和三角化决策。
+
+因此本轮回到前端，补充多模型几何验证：
+
+```text
+F verification
+  -> H/F model comparison
+  -> E/F calibration diagnostic
+  -> E decomposition + median triangulation angle
+  -> simplified WTF similarity filtering
+  -> model_type annotation
+```
+
+### 12.2 已完成内容
+
+新增/修改代码：
+
+- `configs/default.yaml`
+  - 新增 H/E/WTF/全景判断相关阈值。
+- `src/sfm/geometry.py`
+  - 新增 `verify_geometric_models`。
+  - 保留旧 `verify_fundamental_matrix` 兼容入口。
+  - 新增 Homography RANSAC、Essential RANSAC、border similarity WTF 检测、E 分解后三角化角估计。
+- `src/tools/verify_matches.py`
+  - 输出 F/H/E/S 多模型统计。
+  - `scene_graph.json` 边新增 `model_type`、`calibration_status`、`homography_ratio`、`essential_ratio`、`median_triangulation_angle_deg` 等字段。
+- `src/sfm/initialization.py`
+  - 初始化 pair 选择优先使用 `general`、`calibrated`、高几何支持度、低 homography ratio 的图像对。
+
+### 12.3 分类逻辑
+
+当前实现尽量贴近论文，但对 bootstrap 内参采用保守 fallback：
+
+```text
+1. F RANSAC 得到 NF，NF 足够则几何验证通过。
+2. H RANSAC 得到 NH，计算 NH / NF。
+3. E RANSAC 得到 NE，计算 NE / NF，用于 calibration_status。
+4. 若 E 可靠，则 recoverPose 并三角化，计算 median triangulation angle。
+5. 图像边界匹配点估计 similarity transform，作为简化 WTF 检测。
+6. 输出 model_type:
+   general / planar / panoramic / rejected_wtf / unverified
+```
+
+注意：当前内参仍是 bootstrap pinhole，因此 `calibration_status` 是诊断信息，不作为唯一硬拒绝条件。
+
+### 12.4 运行命令
+
+```bash
+conda run -n mm26 python -m src.tools.verify_matches \
+  --scene configs/scenes/south_building_small.yaml \
+  --preview-count 3 \
+  --force
+```
+
+### 12.5 验收结果
+
+`south_building_small` 上重新生成 Phase 3B 结果：
+
+```text
+Pairs: 1225
+Verified scene graph edges: 283
+
+Status counts:
+  verified: 77
+  verified_planar: 201
+  verified_panoramic: 5
+  low_inliers: 78
+  too_few_matches: 864
+
+Model type counts:
+  general: 77
+  planar: 201
+  panoramic: 5
+  unverified: 942
+
+Calibration counts:
+  calibrated: 361
+  uncertain: 864
+
+Inliers min/mean/max:
+  0 / 167.1 / 3635
+
+Homography ratio min/mean/max:
+  0.000 / 0.226 / 0.995
+```
+
+Phase 3B 后，当前初始化选择的候选变为：
+
+```text
+P1180183.JPG <-> P1180184.JPG
+status = verified
+model_type = general
+calibration_status = calibrated
+num_inliers = 2811
+inlier_ratio = 0.978
+homography_ratio = 0.555
+median_triangulation_angle_deg = 6.679
+```
+
+相比旧版只看 `num_inliers * inlier_ratio`，新版会避开 `planar` 和 `panoramic` pair，更符合论文中“初始化不应来自 panoramic，且优先 calibrated/general pair”的原则。
+
+### 12.6 当前影响
+
+本轮只重算了 Phase 3B 的 verified pairs 和 scene graph，没有重跑 Phase 4/5/6。因此：
+
+- 已生成的 Phase 6 reconstruction state 仍是旧 scene graph 下的结果。
+- 若要让 Phase 3B 真正影响重建质量，下一步应重新执行：
+
+```text
+Phase 4B robust initialization
+  -> Phase 5 registration
+  -> Phase 6 triangulation
+```
+
+建议下一步先重新运行 Phase 4 初始化，比较新旧初始 pair 的点云保留率和重投影误差，再决定是否继续补 Phase 4B scoring。
