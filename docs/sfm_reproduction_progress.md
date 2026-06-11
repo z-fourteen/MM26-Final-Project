@@ -1806,3 +1806,274 @@ Phase 7D Paper-style BA / RT / Filtering Iterative Refinement
 
 - pre-BA RT：global BA 前重新三角化以补偿 drift。
 - post-BA RT：BA 改善 pose/points 后，继续之前失败的 tracks；只使用 residual 低于 filtering threshold 的 observations，并尝试 merge tracks。
+
+---
+
+## 20. Phase 7D Paper-style BA / RT / Filtering Iterative Refinement
+
+### 20.1 执行动机
+
+论文 4.4 中的 BA 模块不仅包含 local/global BA，还包含围绕 global BA 的 re-triangulation 和 filtering 迭代：
+
+```text
+pre-BA RT
+  -> global BA
+  -> filtering
+  -> post-BA RT
+  -> BA
+  -> filtering
+  -> repeat until filtered observations and post-BA RT points diminish
+```
+
+Phase 7C 已补上 local/global BA 的 scope。本阶段开始实现论文式 BA/RT/filtering 第一轮闭环。
+
+### 20.2 已完成内容
+
+新增/修改代码：
+
+- `src/tools/triangulate_registered_tracks.py`
+  - 新增 `--stage registered_rt|pre_ba_rt|post_ba_rt`。
+  - 新增 `--residual-report`。
+  - 新增 `--max-observation-error`。
+  - 新增 `--report-name`。
+  - post-BA RT 支持读取 residual report，对高 residual observation 做 gating。
+  - report 新增 `rt_stage`、`residual_report_path`、`blocked_observations_by_residual`、`skipped_matches_by_residual`、`track_merge_implemented` 等字段。
+
+当前边界：
+
+```text
+track merge: not implemented yet
+automatic iterative controller: not implemented yet
+intrinsic refinement: not implemented yet
+```
+
+因此本阶段是论文 BA/RT/filtering 主流程的第一版对齐，不是完整 COLMAP/Ceres 级实现。
+
+### 20.3 运行命令
+
+Baseline registered residual：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name phase7d_registered_residual_baseline_report.json
+```
+
+pre-BA RT：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.triangulate_registered_tracks \
+  --scene configs/scenes/south_building_small.yaml \
+  --stage pre_ba_rt \
+  --report-name phase7d_pre_ba_rt_report.json
+```
+
+Global BA after pre-BA RT：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --scope global \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 1200 \
+  --max-observations 6000 \
+  --min-track-length 2 \
+  --report-name phase7d_global_ba_after_pre_rt_report.json
+```
+
+Filtering after global BA：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.filter_reconstruction \
+  --scene configs/scenes/south_building_small.yaml \
+  --ba-report outputs\south_building_small\reports\phase7d_registered_residual_after_global_ba_report.json \
+  --max-reprojection-error 8.0 \
+  --max-point-median-error 8.0 \
+  --max-point-max-error 32.0 \
+  --min-track-length 2 \
+  --report-name phase7d_filtering_after_global_ba_report.json
+```
+
+post-BA RT：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.triangulate_registered_tracks \
+  --scene configs/scenes/south_building_small.yaml \
+  --stage post_ba_rt \
+  --residual-report outputs\south_building_small\reports\phase7d_registered_residual_after_filtering_report.json \
+  --max-observation-error 8.0 \
+  --report-name phase7d_post_ba_rt_report.json
+```
+
+Final BA/filtering/residual：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --scope global \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 1200 \
+  --max-observations 6000 \
+  --min-track-length 2 \
+  --report-name phase7d_final_global_ba_report.json
+
+D:\06_envs\mm26\python.exe -m src.tools.filter_reconstruction \
+  --scene configs/scenes/south_building_small.yaml \
+  --ba-report outputs\south_building_small\reports\phase7d_registered_residual_after_post_rt_ba_report.json \
+  --max-reprojection-error 8.0 \
+  --max-point-median-error 8.0 \
+  --max-point-max-error 32.0 \
+  --min-track-length 2 \
+  --report-name phase7d_final_filtering_report.json
+
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name phase7d_final_registered_residual_report.json
+```
+
+### 20.4 验收结果
+
+本阶段从 Phase 7C 后的 16-image reconstruction state 出发。
+
+Baseline：
+
+```text
+Points3D: 3848
+Observations: 11076
+Mean registered residual:   1.638 px
+Median registered residual: 1.170 px
+P95 registered residual:    4.837 px
+Observations > 8 px:        2
+```
+
+pre-BA RT：
+
+```text
+Points3D: 3848 -> 4486
+Observations: 11076 -> 13621
+New points3D: 638
+New observations: 2545
+Augmented existing observations: 1173
+New point reprojection error median/mean: 2.472 / 2.825 px
+```
+
+pre-BA RT 后执行 global BA，registered residual 显示新增观测中包含大量 outlier：
+
+```text
+Observations evaluated: 13621
+Mean registered residual:   4.532 px
+Median registered residual: 1.411 px
+P95 registered residual:    14.345 px
+Observations > 8 px:        957
+```
+
+这与论文 4.4 的动机一致：pre-BA RT 可以增加完整度，但会把相当一部分 outlier 带入 BA，必须配合 filtering 和后续迭代。
+
+Filtering after global BA：
+
+```text
+Observations: 13621 -> 12089
+Points3D: 4486 -> 4224
+Removed observations by reprojection: 957
+Removed points total: 262
+```
+
+Filtering 后 registered residual：
+
+```text
+Mean registered residual:   1.727 px
+Median registered residual: 1.252 px
+P95 registered residual:    5.038 px
+Observations > 8 px:        0
+```
+
+post-BA RT：
+
+```text
+Points3D: 4224 -> 4503
+Observations: 12089 -> 13502
+New points3D: 279
+New observations: 1413
+Augmented existing observations: 714
+New point reprojection error median/mean: 3.829 / 3.972 px
+```
+
+由于 post-BA RT 使用的 residual report 来自 filtering 后状态，而此时所有 registered observations 都低于 `8 px`，因此：
+
+```text
+blocked_observations_by_residual: 0
+skipped_matches_by_residual: 0
+```
+
+这说明 residual gating 生效条件存在，但当前过滤后状态没有超阈值 observation 需要屏蔽。
+
+Final BA/filtering：
+
+```text
+After post-BA RT + BA:
+Observations evaluated: 13502
+Mean registered residual:   3.985 px
+Median registered residual: 1.384 px
+P95 registered residual:    8.851 px
+Observations > 8 px:        729
+
+Final filtering:
+Observations: 13502 -> 12434
+Points3D: 4503 -> 4357
+Removed observations by reprojection: 729
+Removed points total: 146
+
+Final registered residual:
+Mean registered residual:   1.776 px
+Median registered residual: 1.271 px
+P90 registered residual:    4.076 px
+P95 registered residual:    5.403 px
+Max registered residual:    7.993 px
+Observations > 8 px:        0
+```
+
+### 20.5 当前结论
+
+Phase 7D 第一版已经跑通论文 4.4 的主流程骨架：
+
+```text
+pre-BA RT
+global BA
+filtering
+post-BA RT
+global BA
+filtering
+```
+
+结果符合论文思想：
+
+- pre-BA RT 和 post-BA RT 都提高了 completeness。
+- RT 会引入 outlier observations，需要 BA/filtering 清理。
+- post-BA RT 的新增点数 `279` 小于 pre-BA RT 的 `638`，有“新增点数减少”的趋势。
+- final filtering 删除 observation 数 `729` 小于第一次 filtering 的 `957`，有“filtered observations diminish”的趋势。
+
+但当前还没有达到完整论文级实现：
+
+- 只执行了一轮手动迭代，没有自动循环到收敛。
+- track merge 尚未实现。
+- post-BA RT 的新点误差偏高，说明仍需更严格的 track continuation 或 triangulation acceptance。
+- 当前 BA 仍是 capped sparse SciPy BA，不是 Ceres/Schur 级全量 BA。
+- 内参 refinement 和 degenerate camera filtering 尚未实现。
+
+下一步建议：
+
+```text
+Phase 7E Automatic BA/RT/Filtering controller
+```
+
+或先进行更保守的：
+
+```text
+Phase 7D.2 stricter post-BA RT acceptance
+```
+
+建议优先做 7D.2，因为 post-BA RT 新点 median/mean reprojection error `3.829 / 3.972 px` 明显高于 pre-BA RT，先改进 RT 接受策略会让后续自动迭代更稳定。

@@ -36,6 +36,7 @@ class TrackBuildResult:
     edge_model_type_counts: dict[str, int]
     used_edges: int
     skipped_edges: int
+    skipped_matches_by_residual: int
 
 
 class UnionFind:
@@ -79,13 +80,19 @@ def sample_color(image_rgb: np.ndarray, point2d: np.ndarray) -> np.ndarray:
     return image_rgb[y, x].astype(np.uint8)
 
 
-def build_registered_tracks(verified_dir: Path, registered_names: set[str]) -> TrackBuildResult:
+def build_registered_tracks(
+    verified_dir: Path,
+    registered_names: set[str],
+    blocked_observations: set[TrackObservation] | None = None,
+) -> TrackBuildResult:
     union_find = UnionFind()
     valid_edges: set[tuple[str, str]] = set()
     edge_status_counts: dict[str, int] = {}
     edge_model_type_counts: dict[str, int] = {}
     used_edges = 0
     skipped_edges = 0
+    skipped_matches_by_residual = 0
+    blocked_observations = blocked_observations or set()
     for verified_path in sorted(verified_dir.glob("*.npz")):
         data = np.load(verified_path)
         image_name1 = str(data["image_name1"])
@@ -108,6 +115,9 @@ def build_registered_tracks(verified_dir: Path, registered_names: set[str]) -> T
         for keypoint_idx1, keypoint_idx2 in matches:
             obs1 = TrackObservation(image_name1, int(keypoint_idx1))
             obs2 = TrackObservation(image_name2, int(keypoint_idx2))
+            if obs1 in blocked_observations or obs2 in blocked_observations:
+                skipped_matches_by_residual += 1
+                continue
             union_find.union(obs1, obs2)
     return TrackBuildResult(
         tracks=union_find.groups(),
@@ -116,6 +126,7 @@ def build_registered_tracks(verified_dir: Path, registered_names: set[str]) -> T
         edge_model_type_counts=edge_model_type_counts,
         used_edges=used_edges,
         skipped_edges=skipped_edges,
+        skipped_matches_by_residual=skipped_matches_by_residual,
     )
 
 
@@ -157,12 +168,38 @@ def add_observation_if_missing(
     return True
 
 
+def load_blocked_observations_from_residual_report(
+    report_path: Path,
+    max_observation_error: float,
+) -> tuple[set[TrackObservation], int]:
+    if not report_path.exists():
+        raise FileNotFoundError(f"Residual report does not exist: {report_path}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    records = report.get("observation_errors", report.get("optimized_observation_errors", []))
+    blocked = set()
+    for record in records:
+        error = float(record["reprojection_error"] if "reprojection_error" in record else record["final_error"])
+        if error <= max_observation_error:
+            continue
+        blocked.add(
+            TrackObservation(
+                image_name=str(record["image_name"]),
+                keypoint_idx=int(record["keypoint_idx"]),
+            )
+        )
+    return blocked, len(records)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Triangulate new 3D points from tracks among registered images.")
     parser.add_argument("--scene", required=True, help="Path to configs/scenes/<scene>.yaml")
     parser.add_argument("--focal-scale", type=float, default=1.2)
     parser.add_argument("--max-pair-samples", type=int, default=100)
     parser.add_argument("--min-track-length", type=int, default=0)
+    parser.add_argument("--stage", default="registered_rt", choices=["registered_rt", "pre_ba_rt", "post_ba_rt"])
+    parser.add_argument("--residual-report", default="", help="Residual report used to gate post-BA RT observations.")
+    parser.add_argument("--max-observation-error", type=float, default=8.0)
+    parser.add_argument("--report-name", default="triangulation_report.json")
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -199,7 +236,24 @@ def main() -> int:
         image_name: projection_matrix(cameras[image_name].K, registered.R, registered.t)
         for image_name, registered in state.registered_images.items()
     }
-    track_build = build_registered_tracks(verified_dir, registered_names)
+    blocked_observations: set[TrackObservation] = set()
+    residual_observations_scored = 0
+    residual_report_path = ""
+    if args.residual_report:
+        residual_report = Path(args.residual_report)
+        residual_report_path = str(residual_report)
+        blocked_observations, residual_observations_scored = load_blocked_observations_from_residual_report(
+            residual_report,
+            max_observation_error=float(args.max_observation_error),
+        )
+    elif args.stage == "post_ba_rt":
+        raise ValueError("post_ba_rt requires --residual-report for observation gating.")
+
+    track_build = build_registered_tracks(
+        verified_dir,
+        registered_names,
+        blocked_observations=blocked_observations,
+    )
     tracks = track_build.tracks
     existing = observation_lookup(state)
 
@@ -220,6 +274,7 @@ def main() -> int:
     skipped_short = 0
     skipped_no_valid_view_pair = 0
     skipped_geometry = 0
+    skipped_observations_by_residual = 0
 
     for track in tqdm(tracks, desc=f"Triangulating {scene['scene_name']}"):
         unique_by_image: dict[str, TrackObservation] = {}
@@ -248,6 +303,9 @@ def main() -> int:
         if len(linked_point_ids) == 1:
             point3d_id = next(iter(linked_point_ids))
             for observation in observations:
+                if observation in blocked_observations:
+                    skipped_observations_by_residual += 1
+                    continue
                 if add_observation_if_missing(state, existing, point3d_id, observation):
                     augmented_observations += 1
             continue
@@ -302,9 +360,15 @@ def main() -> int:
     state_path, registered_npz_path = save_reconstruction_state(state, sparse_dir)
     report = {
         "scene_name": scene["scene_name"],
+        "rt_stage": args.stage,
+        "residual_report_path": residual_report_path,
+        "residual_observations_scored": int(residual_observations_scored),
+        "max_observation_error": float(args.max_observation_error),
+        "blocked_observations_by_residual": len(blocked_observations),
         "registered_images": len(state.registered_images),
         "input_edges_used": track_build.used_edges,
         "input_edges_skipped": track_build.skipped_edges,
+        "skipped_matches_by_residual": track_build.skipped_matches_by_residual,
         "edge_status_counts": track_build.edge_status_counts,
         "edge_model_type_counts": track_build.edge_model_type_counts,
         "input_tracks": len(tracks),
@@ -320,6 +384,8 @@ def main() -> int:
         "skipped_conflicting_point_tracks": int(skipped_conflicting_point_tracks),
         "skipped_no_valid_view_pair_tracks": int(skipped_no_valid_view_pair),
         "skipped_geometry_tracks": int(skipped_geometry),
+        "skipped_observations_by_residual": int(skipped_observations_by_residual),
+        "track_merge_implemented": False,
         "median_new_point_reprojection_error": float(np.median(new_point_errors)) if new_point_errors else 0.0,
         "mean_new_point_reprojection_error": float(np.mean(new_point_errors)) if new_point_errors else 0.0,
         "median_new_point_angle_deg": float(np.median(new_point_angles)) if new_point_angles else 0.0,
@@ -331,10 +397,11 @@ def main() -> int:
         "registered_npz_path": str(registered_npz_path),
         "points_npz_path": str(sparse_dir / "reconstruction_points.npz"),
     }
-    report_path = report_dir / "triangulation_report.json"
+    report_path = report_dir / args.report_name
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"Scene: {scene['scene_name']}")
+    print(f"RT stage: {report['rt_stage']}")
     print(f"Registered images: {report['registered_images']}")
     print(f"Tracks: {report['input_tracks']}")
     print(f"Points3D: {report['initial_points3D']} -> {report['final_points3D']}")
