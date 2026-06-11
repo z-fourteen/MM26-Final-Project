@@ -695,7 +695,8 @@ F verification
   - 输出 F/H/E/S 多模型统计。
   - `scene_graph.json` 边新增 `model_type`、`calibration_status`、`homography_ratio`、`essential_ratio`、`median_triangulation_angle_deg` 等字段。
 - `src/sfm/initialization.py`
-  - 初始化 pair 选择优先使用 `general`、`calibrated`、高几何支持度、低 homography ratio 的图像对。
+  - 初始化 pair 选择严格依赖 Phase 3B scene graph 字段，优先使用 `general`、`calibrated`、高几何支持度、低 homography ratio 的图像对。
+  - 不再兼容旧版只含 `num_inliers / inlier_ratio` 的 scene graph；后续阶段统一按 Phase 3B 输出契约迭代。
 
 ### 12.3 分类逻辑
 

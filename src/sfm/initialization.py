@@ -40,29 +40,22 @@ class InitializationResult:
 def select_initial_pair(edges: list[dict]) -> dict:
     if not edges:
         raise ValueError("Scene graph has no verified edges.")
-    return max(edges, key=initial_pair_score)
+    candidates = [edge for edge in edges if is_initialization_candidate(edge)]
+    if not candidates:
+        raise ValueError("Scene graph has no general/calibrated initialization candidates.")
+    return max(candidates, key=initial_pair_score)
 
 
 def initial_pair_score(edge: dict) -> tuple[float, float, float, float, float]:
-    status = str(edge.get("status", "verified"))
-    model_type = str(edge.get("model_type", "general"))
-    calibration_status = str(edge.get("calibration_status", "uncertain"))
-    num_inliers = float(edge.get("num_inliers", 0))
-    inlier_ratio = float(edge.get("inlier_ratio", 0.0))
-    homography_ratio = float(edge.get("homography_ratio", 0.0))
-    triangulation_angle = float(edge.get("median_triangulation_angle_deg", 0.0))
+    status = str(edge["status"])
+    model_type = str(edge["model_type"])
+    calibration_status = str(edge["calibration_status"])
+    num_inliers = float(edge["num_inliers"])
+    inlier_ratio = float(edge["inlier_ratio"])
+    homography_ratio = float(edge["homography_ratio"])
+    triangulation_angle = float(edge["median_triangulation_angle_deg"])
 
-    if status == "rejected_wtf" or model_type == "rejected_wtf":
-        model_priority = -2.0
-    elif model_type == "panoramic":
-        model_priority = -1.0
-    elif model_type == "general":
-        model_priority = 2.0
-    elif model_type == "planar":
-        model_priority = 0.0
-    else:
-        model_priority = 1.0 if status == "verified" else -1.0
-
+    model_priority = 2.0 if model_type == "general" and status == "verified" else 0.0
     calibration_priority = 1.0 if calibration_status == "calibrated" else 0.0
     geometric_support = num_inliers * inlier_ratio
     return (
@@ -71,6 +64,14 @@ def initial_pair_score(edge: dict) -> tuple[float, float, float, float, float]:
         geometric_support,
         triangulation_angle,
         -homography_ratio,
+    )
+
+
+def is_initialization_candidate(edge: dict) -> bool:
+    return (
+        str(edge["status"]) == "verified"
+        and str(edge["model_type"]) == "general"
+        and str(edge["calibration_status"]) in {"calibrated", "uncertain"}
     )
 
 
