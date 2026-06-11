@@ -27,6 +27,9 @@ def main() -> int:
     parser.add_argument("--loss", default="cauchy", choices=["linear", "soft_l1", "huber", "cauchy", "arctan"])
     parser.add_argument("--f-scale", type=float, default=4.0)
     parser.add_argument("--min-track-length", type=int, default=2)
+    parser.add_argument("--post-ba-rt-policy", default="current", choices=["current", "post_ba_moderate", "post_ba_strict"])
+    parser.add_argument("--enable-track-merge", action="store_true")
+    parser.add_argument("--run-prefix", default="phase7e")
     parser.add_argument("--report-name", default="ba_rt_refinement_report.json")
     args = parser.parse_args()
 
@@ -39,10 +42,10 @@ def main() -> int:
     converged = False
     stop_reason = "max_refinement_iterations_reached"
 
-    baseline_residual = run_registered_residual(args.scene, f"phase7e_iter00_registered_residual_baseline_report.json")
+    baseline_residual = run_registered_residual(args.scene, f"{args.run_prefix}_iter00_registered_residual_baseline_report.json")
 
     for iteration in range(1, args.max_refinement_iterations + 1):
-        prefix = f"phase7e_iter{iteration:02d}"
+        prefix = f"{args.run_prefix}_iter{iteration:02d}"
 
         pre_rt = run_rt(
             scene_path=args.scene,
@@ -72,6 +75,8 @@ def main() -> int:
             report_name=f"{prefix}_post_ba_rt_report.json",
             residual_report=report_dir / f"{prefix}_registered_residual_after_filtering_report.json",
             max_observation_error=args.max_observation_error,
+            rt_policy=args.post_ba_rt_policy,
+            enable_track_merge=args.enable_track_merge,
         )
         final_ba = run_global_ba(
             args=args,
@@ -134,6 +139,9 @@ def main() -> int:
         "ba_max_observations": args.ba_max_observations,
         "loss": args.loss,
         "f_scale": args.f_scale,
+        "post_ba_rt_policy": args.post_ba_rt_policy,
+        "enable_track_merge": bool(args.enable_track_merge),
+        "run_prefix": args.run_prefix,
         "baseline_residual_summary": baseline_residual["error_summary"],
         "iterations": iteration_summaries,
         "converged": converged,
@@ -176,6 +184,8 @@ def run_rt(
     report_name: str,
     residual_report: Path | None = None,
     max_observation_error: float = 8.0,
+    rt_policy: str = "current",
+    enable_track_merge: bool = False,
 ) -> dict:
     argv = [
         "triangulate_registered_tracks",
@@ -185,9 +195,13 @@ def run_rt(
         stage,
         "--report-name",
         report_name,
+        "--rt-policy",
+        rt_policy,
     ]
     if residual_report is not None:
         argv.extend(["--residual-report", str(residual_report), "--max-observation-error", str(max_observation_error)])
+    if enable_track_merge:
+        argv.append("--enable-track-merge")
     call_tool(triangulate_registered_tracks.main, argv)
     return read_report(scene_path, report_name)
 

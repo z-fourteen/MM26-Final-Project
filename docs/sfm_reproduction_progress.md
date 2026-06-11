@@ -2642,3 +2642,162 @@ post_ba_strict policy
 ```
 
 只有在同一 controller / 同一轮数下比较，才能判断 6px 是否真正优于 8px 或 4px。
+
+---
+
+## 24. Phase 7H RT Policy in Automatic Controller
+
+### 24.1 执行动机
+
+Phase 7G 单独测试了 `post_ba_moderate`，但单步实验无法判断 policy 在完整 BA/RT/filtering 迭代中的真实效果。因此本阶段把 RT policy 接入 automatic controller，在同一控制器流程下比较：
+
+```text
+current
+post_ba_moderate
+post_ba_strict
+```
+
+### 24.2 已完成内容
+
+修改代码：
+
+- `src/tools/run_ba_rt_refinement.py`
+  - 新增 `--post-ba-rt-policy current|post_ba_moderate|post_ba_strict`。
+  - 新增 `--enable-track-merge`。
+  - 新增 `--run-prefix`，避免不同 policy 的子报告互相覆盖。
+  - controller report 新增 `post_ba_rt_policy`、`enable_track_merge`、`run_prefix`。
+
+当前设计：
+
+```text
+pre-BA RT:
+  仍使用 current policy
+
+post-BA RT:
+  使用 --post-ba-rt-policy 指定的 policy
+```
+
+这样保留论文中 pre-BA RT 偏 completeness、post-BA RT 偏 refinement 的分工。
+
+### 24.3 运行命令
+
+current policy：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_ba_rt_refinement \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-refinement-iterations 1 \
+  --post-ba-rt-policy current \
+  --enable-track-merge \
+  --report-name phase7h_controller_current_report.json
+```
+
+moderate policy：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_ba_rt_refinement \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-refinement-iterations 1 \
+  --post-ba-rt-policy post_ba_moderate \
+  --enable-track-merge \
+  --report-name phase7h_controller_moderate_report.json
+```
+
+strict policy：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_ba_rt_refinement \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-refinement-iterations 1 \
+  --post-ba-rt-policy post_ba_strict \
+  --enable-track-merge \
+  --report-name phase7h_controller_strict_report.json
+```
+
+注意：本轮三组实验是顺序推进当前 state，并非从同一 baseline 回滚后重跑，因此只能作为工程趋势对照，而不是严格消融实验。后续若要做论文报告级消融，应使用同一 baseline 快照分别运行三组 policy。
+
+### 24.4 验收结果
+
+三组 controller 主报告汇总如下。
+
+current policy：
+
+```text
+baseline mean residual: 1.734 px
+pre-BA RT new points: 318
+post-BA RT new points: 89
+filtering after pre-BA removed observations: 719
+final filtering removed observations: 1055
+final points3D: 4234
+final observations: 12169
+final mean residual: 1.782 px
+final P95 residual: 5.521 px
+final observations > 8 px: 0
+```
+
+post_ba_moderate policy：
+
+```text
+baseline mean residual: 1.782 px
+pre-BA RT new points: 304
+post-BA RT new points: 60
+filtering after pre-BA removed observations: 718
+final filtering removed observations: 1046
+final points3D: 4259
+final observations: 12214
+final mean residual: 1.795 px
+final P95 residual: 5.661 px
+final observations > 8 px: 0
+```
+
+post_ba_strict policy：
+
+```text
+baseline mean residual: 1.795 px
+pre-BA RT new points: 289
+post-BA RT new points: 49
+filtering after pre-BA removed observations: 747
+final filtering removed observations: 1043
+final points3D: 4275
+final observations: 12224
+final mean residual: 1.799 px
+final P95 residual: 5.737 px
+final observations > 8 px: 0
+```
+
+### 24.5 当前结论
+
+RT policy 接入 controller 后，趋势很明确：
+
+```text
+current post-BA RT new points: 89
+moderate post-BA RT new points: 60
+strict post-BA RT new points: 49
+```
+
+post-BA RT 越严格，新点数量越少，且 strict 已低于 `min_new_points = 50`。但是：
+
+```text
+final filtering removed observations:
+current  = 1055
+moderate = 1046
+strict   = 1043
+```
+
+过滤压力几乎没有下降。这说明当前主要 outlier 来源并不只是 post-BA RT 新点，而更可能来自：
+
+- pre-BA RT 仍然使用 current policy，持续引入大量候选。
+- augmented existing observations 没有足够严格的即时 residual check。
+- BA 子问题 capped sampling 可能没有覆盖全部新加入观测。
+
+因此下一步不应继续只收紧 post-BA RT policy，也不应立刻做 intrinsic refinement。更合理的是：
+
+```text
+Phase 7I RT policy for pre-BA RT and augmented observations
+```
+
+重点：
+
+- pre-BA RT 也支持 policy 对照。
+- 对 augmented existing observations 做即时 reprojection gating。
+- controller 支持同一 baseline 快照运行 policy 消融，避免顺序 state 影响。
