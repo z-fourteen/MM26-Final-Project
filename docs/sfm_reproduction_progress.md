@@ -1266,3 +1266,177 @@ Phase 7B BA-based filtering
 - 过滤后再执行一轮局部 BA，比较误差和后续 Phase 5C 注册能力。
 
 论文级别的完整 BA 可以作为 Phase 7C 实现，并在数学建模报告中与 Phase 7A 简化版形成对照：简化版用于解释核心优化思想，论文级版本用于展示更完整的鲁棒性和工程效果。
+
+---
+
+## 17. Phase 7B BA-based Filtering
+
+### 17.1 执行动机
+
+Phase 7A 的 BA 只优化连续变量：
+
+```text
+camera poses + 3D points
+```
+
+但错误匹配、错误 track 和局部低质量三角化属于离散 outlier，不能指望 BA 自动“优化正确”。因此 Phase 7B 新增基于 BA residual 的过滤步骤：
+
+```text
+BA
+  -> measure observation residuals
+  -> remove high-error observations
+  -> remove weak / high-error points
+  -> compact point3D ids
+  -> run BA again
+```
+
+### 17.2 BA 报告指标修正
+
+本阶段首先修正了 BA report 中优化目标和诊断指标混淆的问题。
+
+新增/明确区分：
+
+```text
+initial_squared_residual_cost
+final_squared_residual_cost
+initial_robust_cost
+final_robust_cost
+scipy_final_robust_cost
+```
+
+其中：
+
+- `robust_cost` 对应实际优化目标，例如 Cauchy loss。
+- `squared_residual_cost` 只作为离群点诊断指标。
+- `median / mean / p90 / p95 / max reprojection error` 用于直观评估重建质量。
+- `observations_above_4px / 8px / 16px` 用于判断是否仍有明显 outlier。
+
+同时 BA report 新增逐 observation 误差：
+
+```text
+optimized_observation_errors
+```
+
+用于 Phase 7B 复现过滤决策。
+
+### 17.3 已完成内容
+
+新增/修改代码：
+
+- `src/sfm/bundle_adjustment.py`
+  - 新增 `robust_residual_cost`。
+  - 新增 `squared_residual_cost`。
+  - 新增 `error_distribution`。
+  - `BundleAdjustmentResult` 明确保存 squared cost 与 robust cost。
+- `src/tools/run_bundle_adjustment.py`
+  - 报告新增 robust/squared cost、p90/p95、逐 observation errors。
+  - 新增 `--report-name`，避免多次 BA 覆盖同名报告。
+  - BA state 备份改为唯一文件名，避免覆盖已有 baseline。
+- `src/sfm/filtering.py`
+  - 新增 BA residual filtering 核心逻辑。
+  - 支持 observation-level filtering。
+  - 支持 point-level filtering。
+  - 支持 point3D id compact/remap。
+- `src/tools/filter_reconstruction.py`
+  - 新增 Phase 7B 命令行工具。
+  - 支持 `--ba-report`、`--max-reprojection-error`、`--max-point-median-error`、`--max-point-max-error`、`--min-track-length`。
+  - 新增 `--report-name`。
+  - filtering state 备份同样改为唯一文件名。
+
+### 17.4 运行命令
+
+过滤前 BA：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 800 \
+  --max-observations 3000 \
+  --min-track-length 2 \
+  --report-name bundle_adjustment_before_filtering_report.json
+```
+
+BA-based filtering：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.filter_reconstruction \
+  --scene configs/scenes/south_building_small.yaml \
+  --ba-report outputs\south_building_small\reports\bundle_adjustment_before_filtering_report.json \
+  --max-reprojection-error 8.0 \
+  --max-point-median-error 8.0 \
+  --max-point-max-error 32.0 \
+  --min-track-length 2 \
+  --report-name filtering_report.json
+```
+
+过滤后 BA：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 800 \
+  --max-observations 3000 \
+  --min-track-length 2 \
+  --report-name bundle_adjustment_after_filtering_report.json
+```
+
+### 17.5 验收结果
+
+首次有效执行 Phase 7B filtering 时，从 Phase 6B + Phase 5C 后的 16-image reconstruction 出发，过滤结果为：
+
+```text
+Observations: 11517 -> 11209
+Points3D: 3930 -> 3890
+Removed observations by reprojection: 178
+Removed points by track length: 0
+Removed points by error: 40
+Removed points total: 40
+Registered images: 16
+```
+
+过滤后同规模 BA 的质量：
+
+```text
+Points3D total: 3890
+Observations total: 11209
+Optimized points: 574
+Optimized observations: 3000
+
+Median reprojection error: 1.347 -> 1.332 px
+Mean reprojection error:   1.716 -> 1.713 px
+P95 reprojection error:    4.720 -> 4.695 px
+Observations > 8 px:       0 -> 0
+```
+
+相比过滤前 7A 的均值误差约 `4.540 px`，过滤后 BA 子问题的均值误差降至约 `1.713 px`，说明高误差 observation / point filtering 有效清理了主要离群项。
+
+### 17.6 当前注意事项
+
+本阶段执行过程中发现原来的 BA/filtering 备份文件会覆盖同名 `*_before_ba.*` / `*_before_filtering.*` 文件，导致后续重复实验时 baseline 不够稳。该问题已修复：现在备份路径会自动使用唯一文件名。
+
+当前 filtering 第一版只清理 BA 子问题覆盖到的 observation，也就是 `optimized_observation_errors` 中出现过的观测；未进入本轮 BA 的 observations 不会被误删。这是一个保守设计，适合作为 7B 第一版。后续若要更强，可以实现 full-reconstruction residual evaluation 后再过滤全部 observation。
+
+下一步建议：
+
+```text
+Phase 7C Local / Global BA policy
+```
+
+或先进行：
+
+```text
+Phase 7B.2 full residual evaluation + second-pass filtering
+```
+
+如果目标是更贴近论文，应继续补充：
+
+- 局部 BA 与全局 BA 触发策略。
+- 内参 refinement。
+- 更系统的 outlier filtering。
+- 与 Phase 5C / 6B 的再次闭环验证。

@@ -30,8 +30,10 @@ class BundleAdjustmentResult:
     problem: BundleAdjustmentProblem
     initial_errors: np.ndarray
     final_errors: np.ndarray
-    optimizer_cost_initial: float
-    optimizer_cost_final: float
+    initial_squared_residual_cost: float
+    final_squared_residual_cost: float
+    initial_robust_cost: float
+    final_robust_cost: float
     optimizer_robust_cost_final: float
     num_function_evaluations: int
     success: bool
@@ -162,13 +164,63 @@ def run_bundle_adjustment(
         problem=problem,
         initial_errors=residuals_to_errors(initial_residuals),
         final_errors=residuals_to_errors(final_residuals),
-        optimizer_cost_initial=float(0.5 * np.sum(initial_residuals**2)),
-        optimizer_cost_final=float(0.5 * np.sum(final_residuals**2)),
+        initial_squared_residual_cost=squared_residual_cost(initial_residuals),
+        final_squared_residual_cost=squared_residual_cost(final_residuals),
+        initial_robust_cost=robust_residual_cost(initial_residuals, loss=loss, f_scale=f_scale),
+        final_robust_cost=robust_residual_cost(final_residuals, loss=loss, f_scale=f_scale),
         optimizer_robust_cost_final=float(result.cost),
         num_function_evaluations=int(result.nfev),
         success=bool(result.success),
         message=str(result.message),
     )
+
+
+def squared_residual_cost(residuals: np.ndarray) -> float:
+    return float(0.5 * np.sum(residuals.astype(np.float64) ** 2))
+
+
+def robust_residual_cost(residuals: np.ndarray, loss: str, f_scale: float) -> float:
+    if residuals.size == 0:
+        return 0.0
+    scale = float(f_scale)
+    if scale <= 0:
+        raise ValueError(f"f_scale must be positive, got {f_scale}")
+    z = (residuals.astype(np.float64) / scale) ** 2
+    if loss == "linear":
+        rho = z
+    elif loss == "soft_l1":
+        rho = 2.0 * (np.sqrt(1.0 + z) - 1.0)
+    elif loss == "huber":
+        rho = np.where(z <= 1.0, z, 2.0 * np.sqrt(z) - 1.0)
+    elif loss == "cauchy":
+        rho = np.log1p(z)
+    elif loss == "arctan":
+        rho = np.arctan(z)
+    else:
+        raise ValueError(f"Unsupported robust loss: {loss}")
+    return float(0.5 * scale**2 * np.sum(rho))
+
+
+def error_distribution(errors: np.ndarray, thresholds: tuple[float, ...] = (4.0, 8.0, 16.0)) -> dict:
+    if errors.size == 0:
+        summary = {
+            "mean": 0.0,
+            "median": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "max": 0.0,
+        }
+    else:
+        summary = {
+            "mean": float(np.mean(errors)),
+            "median": float(np.median(errors)),
+            "p90": float(np.percentile(errors, 90)),
+            "p95": float(np.percentile(errors, 95)),
+            "max": float(np.max(errors)),
+        }
+    for threshold in thresholds:
+        summary[f"observations_above_{int(threshold)}px"] = int(np.sum(errors > threshold))
+    return summary
 
 
 def bundle_adjustment_sparsity(problem: BundleAdjustmentProblem):

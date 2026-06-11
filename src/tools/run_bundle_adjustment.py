@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.sfm.bundle_adjustment import per_image_error_summary, run_bundle_adjustment
+from src.sfm.bundle_adjustment import error_distribution, per_image_error_summary, run_bundle_adjustment
 from src.sfm.camera import estimate_simple_pinhole
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
@@ -25,6 +25,7 @@ def main() -> int:
     parser.add_argument("--max-observations", type=int, default=8000)
     parser.add_argument("--min-track-length", type=int, default=2)
     parser.add_argument("--focal-scale", type=float, default=1.2)
+    parser.add_argument("--report-name", default="bundle_adjustment_report.json")
     parser.add_argument("--dry-run", action="store_true", help="Run BA and report metrics without writing optimized state.")
     args = parser.parse_args()
 
@@ -75,6 +76,8 @@ def main() -> int:
 
     initial_errors = result.initial_errors
     final_errors = result.final_errors
+    initial_error_summary = error_distribution(initial_errors)
+    final_error_summary = error_distribution(final_errors)
     report = {
         "scene_name": scene["scene_name"],
         "dry_run": bool(args.dry_run),
@@ -94,26 +97,46 @@ def main() -> int:
         "optimizer_success": result.success,
         "optimizer_message": result.message,
         "num_function_evaluations": result.num_function_evaluations,
-        "initial_squared_residual_cost": result.optimizer_cost_initial,
-        "final_squared_residual_cost": result.optimizer_cost_final,
-        "final_robust_cost": result.optimizer_robust_cost_final,
-        "initial_median_reprojection_error": float(np.median(initial_errors)) if initial_errors.size else 0.0,
-        "final_median_reprojection_error": float(np.median(final_errors)) if final_errors.size else 0.0,
-        "initial_mean_reprojection_error": float(np.mean(initial_errors)) if initial_errors.size else 0.0,
-        "final_mean_reprojection_error": float(np.mean(final_errors)) if final_errors.size else 0.0,
-        "initial_max_reprojection_error": float(np.max(initial_errors)) if initial_errors.size else 0.0,
-        "final_max_reprojection_error": float(np.max(final_errors)) if final_errors.size else 0.0,
-        "initial_observations_above_8px": int(np.sum(initial_errors > 8.0)),
-        "final_observations_above_8px": int(np.sum(final_errors > 8.0)),
-        "initial_observations_above_16px": int(np.sum(initial_errors > 16.0)),
-        "final_observations_above_16px": int(np.sum(final_errors > 16.0)),
+        "initial_squared_residual_cost": result.initial_squared_residual_cost,
+        "final_squared_residual_cost": result.final_squared_residual_cost,
+        "initial_robust_cost": result.initial_robust_cost,
+        "final_robust_cost": result.final_robust_cost,
+        "scipy_final_robust_cost": result.optimizer_robust_cost_final,
+        "initial_error_summary": initial_error_summary,
+        "final_error_summary": final_error_summary,
+        "initial_median_reprojection_error": initial_error_summary["median"],
+        "final_median_reprojection_error": final_error_summary["median"],
+        "initial_mean_reprojection_error": initial_error_summary["mean"],
+        "final_mean_reprojection_error": final_error_summary["mean"],
+        "initial_p90_reprojection_error": initial_error_summary["p90"],
+        "final_p90_reprojection_error": final_error_summary["p90"],
+        "initial_p95_reprojection_error": initial_error_summary["p95"],
+        "final_p95_reprojection_error": final_error_summary["p95"],
+        "initial_max_reprojection_error": initial_error_summary["max"],
+        "final_max_reprojection_error": final_error_summary["max"],
+        "initial_observations_above_4px": initial_error_summary["observations_above_4px"],
+        "final_observations_above_4px": final_error_summary["observations_above_4px"],
+        "initial_observations_above_8px": initial_error_summary["observations_above_8px"],
+        "final_observations_above_8px": final_error_summary["observations_above_8px"],
+        "initial_observations_above_16px": initial_error_summary["observations_above_16px"],
+        "final_observations_above_16px": final_error_summary["observations_above_16px"],
         "per_image_before": per_image_error_summary(result.problem.observations, initial_errors),
         "per_image_after": per_image_error_summary(result.problem.observations, final_errors),
+        "optimized_observation_errors": [
+            {
+                "point3D_id": int(observation["point3D_id"]),
+                "image_name": str(observation["image_name"]),
+                "keypoint_idx": int(observation["keypoint_idx"]),
+                "initial_error": float(initial_error),
+                "final_error": float(final_error),
+            }
+            for observation, initial_error, final_error in zip(result.problem.observations, initial_errors, final_errors)
+        ],
         "state_path": str(state_path),
         "registered_npz_path": str(registered_npz_path),
         "backup_paths": backup_paths,
     }
-    report_path = report_dir / "bundle_adjustment_report.json"
+    report_path = report_dir / args.report_name
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"Scene: {scene['scene_name']}")
@@ -143,10 +166,22 @@ def backup_reconstruction_state(sparse_dir: Path) -> dict[str, str]:
         source = sparse_dir / source_name
         if not source.exists():
             continue
-        backup = sparse_dir / backup_name
+        backup = unique_backup_path(sparse_dir / backup_name)
         shutil.copy2(source, backup)
         backup_paths[source_name] = str(backup)
     return backup_paths
+
+
+def unique_backup_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(1, 1000):
+        candidate = path.with_name(f"{stem}_{index}{suffix}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"Could not create a unique backup path for {path}")
 
 
 if __name__ == "__main__":
