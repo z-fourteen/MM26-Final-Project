@@ -97,7 +97,7 @@ def build_bundle_adjustment_problem(
     ]
     observations.sort(key=lambda item: (int(item["point3D_id"]), str(item["image_name"]), int(item["keypoint_idx"])))
     if max_observations > 0:
-        observations = observations[:max_observations]
+        observations = select_observations_with_balanced_coverage(observations, max_observations)
         selected_point_ids = np.asarray(
             sorted({int(observation["point3D_id"]) for observation in observations}),
             dtype=np.int32,
@@ -149,6 +149,43 @@ def build_bundle_adjustment_problem(
         point_param_slices=point_param_slices,
         initial_params=np.asarray(params, dtype=np.float64),
     )
+
+
+def select_observations_with_balanced_coverage(observations: list[dict], max_observations: int) -> list[dict]:
+    if max_observations <= 0 or len(observations) <= max_observations:
+        return observations
+
+    grouped_by_image: dict[str, list[dict]] = {}
+    for observation in observations:
+        grouped_by_image.setdefault(str(observation["image_name"]), []).append(observation)
+
+    image_names = sorted(grouped_by_image)
+    selected = []
+    selected_keys: set[tuple[int, str, int]] = set()
+    cursor = 0
+    while len(selected) < max_observations and image_names:
+        image_name = image_names[cursor % len(image_names)]
+        bucket = grouped_by_image[image_name]
+        if bucket:
+            observation = bucket.pop(0)
+            key = (
+                int(observation["point3D_id"]),
+                str(observation["image_name"]),
+                int(observation["keypoint_idx"]),
+            )
+            if key not in selected_keys:
+                selected.append(observation)
+                selected_keys.add(key)
+        if not bucket:
+            image_names.remove(image_name)
+            if not image_names:
+                break
+            cursor %= len(image_names)
+        else:
+            cursor += 1
+
+    selected.sort(key=lambda item: (int(item["point3D_id"]), str(item["image_name"]), int(item["keypoint_idx"])))
+    return selected
 
 
 def run_bundle_adjustment(

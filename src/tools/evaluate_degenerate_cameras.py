@@ -8,7 +8,8 @@ import numpy as np
 
 from src.sfm.bundle_adjustment import build_covisibility_graph
 from src.sfm.config import load_scene_config, resolve_project_path
-from src.sfm.reconstruction import load_reconstruction_state
+from src.sfm.filtering import compact_reconstruction_points
+from src.sfm.reconstruction import load_reconstruction_state, save_reconstruction_state
 
 
 def main() -> int:
@@ -23,6 +24,7 @@ def main() -> int:
     parser.add_argument("--min-covisibility-degree", type=int, default=1)
     parser.add_argument("--center-outlier-mad-scale", type=float, default=8.0)
     parser.add_argument("--report-name", default="degenerate_camera_report.json")
+    parser.add_argument("--remove-candidates", action="store_true")
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -109,6 +111,7 @@ def main() -> int:
     candidates = [record for record in per_camera if record["is_degenerate_candidate"]]
     report = {
         "scene_name": scene["scene_name"],
+        "remove_candidates": bool(args.remove_candidates),
         "residual_report_path": residual_report_path,
         "num_registered_images": len(state.registered_images),
         "num_degenerate_candidates": len(candidates),
@@ -123,6 +126,27 @@ def main() -> int:
         },
         "per_camera": per_camera,
     }
+    if args.remove_candidates and candidates:
+        remove_names = {str(record["image_name"]) for record in candidates}
+        for image_name in remove_names:
+            state.registered_images.pop(image_name, None)
+        kept_observations = [
+            observation
+            for observation in state.observations
+            if str(observation["image_name"]) not in remove_names
+        ]
+        filtered_state, point_id_map = compact_reconstruction_points(state, kept_observations)
+        state_path, registered_npz_path = save_reconstruction_state(filtered_state, sparse_dir)
+        report.update(
+            {
+                "removed_camera_names": sorted(remove_names),
+                "state_path": str(state_path),
+                "registered_npz_path": str(registered_npz_path),
+                "observations_after_camera_filtering": len(filtered_state.observations),
+                "points_after_camera_filtering": int(filtered_state.points3d.shape[0]),
+                "point_id_map_size": len(point_id_map),
+            }
+        )
     report_path = report_dir / args.report_name
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
