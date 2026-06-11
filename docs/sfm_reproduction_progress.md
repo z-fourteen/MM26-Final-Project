@@ -2422,3 +2422,223 @@ Phase 7G Stricter RT Continuation / Acceptance
 - 新点接受时增加 median/max reprojection error 双阈值。
 - 对 post-BA RT 单独设置更高的 min track length 或 min triangulation angle。
 - 将 RT 新增 observations 的质量统计加入自动控制器停止条件。
+
+---
+
+## 23. Phase 7G RT Acceptance Policy
+
+### 23.1 执行动机
+
+Phase 7F 表明 track merge 能减少 conflicting tracks，但 RT 后仍会产生大量后续被 filtering 删除的 observations：
+
+```text
+filtering removed observations = 996
+```
+
+这说明问题不只是 track conflict，而是 post-BA RT 的接受策略仍偏宽松。BA/filtering 能清理 outlier，但如果 RT 每轮持续加入大量低质量 observations，迭代控制器就难以满足论文中的 diminish 停止条件。
+
+本阶段不直接把阈值改到过严的 `4px`，而是先实现 policy 化：
+
+```text
+current
+post_ba_moderate
+post_ba_strict
+```
+
+并先测试 `post_ba_moderate`。
+
+### 23.2 已完成内容
+
+修改代码：
+
+- `src/tools/triangulate_registered_tracks.py`
+  - 新增 `--rt-policy current|post_ba_moderate|post_ba_strict`。
+  - 新增 `--max-new-point-median-error`。
+  - 新增 `--max-new-point-max-error`。
+  - 新点接受时增加 median/max reprojection error policy。
+  - track merge 时同样检查新点 error policy。
+  - report 新增：
+    - `rt_policy`
+    - `max_new_point_median_error_px`
+    - `max_new_point_max_error_px`
+    - `skipped_new_point_error_policy`
+    - `rejected_merge_error_policy`
+
+当前 policy：
+
+```text
+current:
+  max_reproj_error_px = config default, currently 8.0
+  min_track_length = config/default CLI
+  min_triangulation_angle_deg = config default
+
+post_ba_moderate:
+  max_reproj_error_px = 6.0
+  max_new_point_median_error_px = 3.0
+  max_new_point_max_error_px = 6.0
+  min_track_length >= 3
+  min_triangulation_angle_deg = 2.0
+
+post_ba_strict:
+  max_reproj_error_px = 4.0
+  max_new_point_median_error_px = 2.5
+  max_new_point_max_error_px = 4.0
+  min_track_length >= 3
+  min_triangulation_angle_deg = 2.0
+```
+
+### 23.3 运行命令
+
+Baseline residual：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name phase7g_registered_residual_baseline_report.json
+```
+
+post-BA RT moderate：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.triangulate_registered_tracks \
+  --scene configs/scenes/south_building_small.yaml \
+  --stage post_ba_rt \
+  --rt-policy post_ba_moderate \
+  --residual-report outputs\south_building_small\reports\phase7g_registered_residual_baseline_report.json \
+  --max-observation-error 8.0 \
+  --enable-track-merge \
+  --report-name phase7g_post_ba_rt_moderate_report.json
+```
+
+moderate RT 后 BA/filtering：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --scope global \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 1200 \
+  --max-observations 6000 \
+  --min-track-length 2 \
+  --report-name phase7g_global_ba_after_moderate_rt_report.json
+
+D:\06_envs\mm26\python.exe -m src.tools.filter_reconstruction \
+  --scene configs/scenes/south_building_small.yaml \
+  --ba-report outputs\south_building_small\reports\phase7g_registered_residual_after_moderate_rt_ba_report.json \
+  --max-reprojection-error 8.0 \
+  --max-point-median-error 8.0 \
+  --max-point-max-error 32.0 \
+  --min-track-length 2 \
+  --report-name phase7g_filtering_after_moderate_rt_ba_report.json
+```
+
+### 23.4 验收结果
+
+Baseline：
+
+```text
+Points3D: 4265
+Observations: 12178
+Mean residual:   1.772 px
+Median residual: 1.268 px
+P95 residual:    5.448 px
+Observations > 8 px: 0
+```
+
+post-BA RT moderate：
+
+```text
+Policy: post_ba_moderate
+max_reproj_error_px: 6.0
+max_new_point_median_error_px: 3.0
+max_new_point_max_error_px: 6.0
+min_track_length: 3
+min_triangulation_angle_deg: 2.0
+
+Points3D: 4265 -> 4326
+Observations: 12178 -> 13156
+New points3D: 61
+New observations: 978
+Augmented existing observations: 742
+Merged tracks: 0
+Skipped new point error policy: 10
+New point reprojection error median/mean: 1.798 / 1.828 px
+```
+
+对比 Phase 7F 的 post-BA RT with merge：
+
+```text
+Phase 7F current policy:
+  New points3D: 131
+  New observations: 1268
+  New point error median/mean: 2.365 / 2.858 px
+  Filtering removed observations: 996
+
+Phase 7G moderate policy:
+  New points3D: 61
+  New observations: 978
+  New point error median/mean: 1.798 / 1.828 px
+  Filtering removed observations: 744
+```
+
+moderate RT 后 BA/filtering：
+
+```text
+After BA:
+Mean registered residual:   4.550 px
+Median registered residual: 1.348 px
+P95 registered residual:    9.994 px
+Observations > 8 px:        744
+
+Filtering:
+Observations: 13156 -> 12092
+Points3D: 4326 -> 4197
+Removed observations by reprojection: 744
+Removed points total: 129
+
+Final registered residual:
+Mean residual:   1.734 px
+Median residual: 1.242 px
+P95 residual:    5.354 px
+Observations > 8 px: 0
+```
+
+### 23.5 当前结论
+
+`post_ba_moderate` policy 有效降低了 RT 新点数量和过滤压力：
+
+- 新点误差明显下降。
+- `filtering removed observations` 从 Phase 7F 的 `996` 降到 `744`。
+- 最终 residual 保持干净，`>8px = 0`。
+
+代价是 completeness 增长变慢：
+
+```text
+New points3D: 131 -> 61
+Final points3D: 4265 -> 4197
+```
+
+因此当前结论是：
+
+```text
+6px moderate policy 比直接 4px strict 更稳妥；
+它能降低 outlier 压力，但仍未让 filtering removed observations 降到收敛阈值。
+```
+
+下一步建议：
+
+```text
+Phase 7H Integrate RT policy into automatic controller
+```
+
+在同一自动迭代框架下比较：
+
+```text
+current policy
+post_ba_moderate policy
+post_ba_strict policy
+```
+
+只有在同一 controller / 同一轮数下比较，才能判断 6px 是否真正优于 8px 或 4px。

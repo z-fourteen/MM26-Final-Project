@@ -189,6 +189,8 @@ def try_merge_conflicting_points(
     min_angle_deg: float,
     min_track_length: int,
     max_pair_samples: int,
+    max_new_point_median_error_px: float,
+    max_new_point_max_error_px: float,
 ) -> tuple[bool, str]:
     merged_by_key: dict[tuple[str, int], TrackObservation] = {}
     for point3d_id in sorted(linked_point_ids):
@@ -232,6 +234,12 @@ def try_merge_conflicting_points(
     )
     if result is None:
         return False, "geometry"
+    if not passes_new_point_error_policy(
+        result.reprojection_errors,
+        max_new_point_median_error_px=max_new_point_median_error_px,
+        max_new_point_max_error_px=max_new_point_max_error_px,
+    ):
+        return False, "error_policy"
 
     keep_point_id = min(int(point_id) for point_id in linked_point_ids)
     state.points3d[keep_point_id] = result.point3d.astype(np.float64)
@@ -251,6 +259,56 @@ def try_merge_conflicting_points(
 def median_color_for_points(state: ReconstructionState, point_ids: set[int]) -> np.ndarray:
     colors = state.colors[np.asarray(sorted(point_ids), dtype=np.int32)].astype(np.float64)
     return np.median(colors, axis=0).astype(np.uint8)
+
+
+def passes_new_point_error_policy(
+    reprojection_errors: np.ndarray,
+    max_new_point_median_error_px: float,
+    max_new_point_max_error_px: float,
+) -> bool:
+    if reprojection_errors.size == 0:
+        return False
+    if max_new_point_median_error_px > 0 and float(np.median(reprojection_errors)) > max_new_point_median_error_px:
+        return False
+    if max_new_point_max_error_px > 0 and float(np.max(reprojection_errors)) > max_new_point_max_error_px:
+        return False
+    return True
+
+
+def resolve_rt_policy(args: argparse.Namespace, default: dict) -> dict:
+    max_reproj_error_px = float(default["sfm"].get("max_reproj_error_px", 8.0))
+    min_angle_deg = float(default["sfm"].get("min_triangulation_angle_deg", 1.5))
+    min_track_length = int(args.min_track_length or default["sfm"].get("min_track_length", 2))
+    max_new_point_median_error_px = float(args.max_new_point_median_error)
+    max_new_point_max_error_px = float(args.max_new_point_max_error)
+
+    if args.rt_policy == "post_ba_moderate":
+        max_reproj_error_px = 6.0
+        min_angle_deg = 2.0
+        min_track_length = max(min_track_length, 3)
+        if max_new_point_median_error_px <= 0:
+            max_new_point_median_error_px = 3.0
+        if max_new_point_max_error_px <= 0:
+            max_new_point_max_error_px = 6.0
+    elif args.rt_policy == "post_ba_strict":
+        max_reproj_error_px = 4.0
+        min_angle_deg = 2.0
+        min_track_length = max(min_track_length, 3)
+        if max_new_point_median_error_px <= 0:
+            max_new_point_median_error_px = 2.5
+        if max_new_point_max_error_px <= 0:
+            max_new_point_max_error_px = 4.0
+    elif args.rt_policy != "current":
+        raise ValueError(f"Unsupported RT policy: {args.rt_policy}")
+
+    return {
+        "rt_policy": args.rt_policy,
+        "max_reproj_error_px": max_reproj_error_px,
+        "min_triangulation_angle_deg": min_angle_deg,
+        "min_track_length": min_track_length,
+        "max_new_point_median_error_px": max_new_point_median_error_px,
+        "max_new_point_max_error_px": max_new_point_max_error_px,
+    }
 
 
 def load_blocked_observations_from_residual_report(
@@ -286,6 +344,9 @@ def main() -> int:
     parser.add_argument("--max-observation-error", type=float, default=8.0)
     parser.add_argument("--report-name", default="triangulation_report.json")
     parser.add_argument("--enable-track-merge", action="store_true")
+    parser.add_argument("--rt-policy", default="current", choices=["current", "post_ba_moderate", "post_ba_strict"])
+    parser.add_argument("--max-new-point-median-error", type=float, default=0.0)
+    parser.add_argument("--max-new-point-max-error", type=float, default=0.0)
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -343,9 +404,12 @@ def main() -> int:
     tracks = track_build.tracks
     existing = observation_lookup(state)
 
-    max_reproj_error_px = float(default["sfm"].get("max_reproj_error_px", 8.0))
-    min_angle_deg = float(default["sfm"].get("min_triangulation_angle_deg", 1.5))
-    min_track_length = int(args.min_track_length or default["sfm"].get("min_track_length", 2))
+    rt_policy = resolve_rt_policy(args, default)
+    max_reproj_error_px = float(rt_policy["max_reproj_error_px"])
+    min_angle_deg = float(rt_policy["min_triangulation_angle_deg"])
+    min_track_length = int(rt_policy["min_track_length"])
+    max_new_point_median_error_px = float(rt_policy["max_new_point_median_error_px"])
+    max_new_point_max_error_px = float(rt_policy["max_new_point_max_error_px"])
 
     initial_points = int(state.points3d.shape[0])
     initial_observations = int(len(state.observations))
@@ -361,11 +425,13 @@ def main() -> int:
     skipped_no_valid_view_pair = 0
     skipped_geometry = 0
     skipped_observations_by_residual = 0
+    skipped_new_point_error_policy = 0
     merged_tracks = 0
     rejected_merge_same_image_conflict = 0
     rejected_merge_short = 0
     rejected_merge_no_valid_pair = 0
     rejected_merge_geometry = 0
+    rejected_merge_error_policy = 0
 
     for track in tqdm(tracks, desc=f"Triangulating {scene['scene_name']}"):
         unique_by_image: dict[str, TrackObservation] = {}
@@ -403,6 +469,8 @@ def main() -> int:
                     min_angle_deg=min_angle_deg,
                     min_track_length=min_track_length,
                     max_pair_samples=args.max_pair_samples,
+                    max_new_point_median_error_px=max_new_point_median_error_px,
+                    max_new_point_max_error_px=max_new_point_max_error_px,
                 )
                 if merged:
                     merged_tracks += 1
@@ -415,6 +483,8 @@ def main() -> int:
                     rejected_merge_no_valid_pair += 1
                 elif reason == "geometry":
                     rejected_merge_geometry += 1
+                elif reason == "error_policy":
+                    rejected_merge_error_policy += 1
             skipped_conflicting_point_tracks += 1
             continue
         if len(linked_point_ids) == 1:
@@ -453,6 +523,13 @@ def main() -> int:
         if result is None:
             skipped_geometry += 1
             continue
+        if not passes_new_point_error_policy(
+            result.reprojection_errors,
+            max_new_point_median_error_px=max_new_point_median_error_px,
+            max_new_point_max_error_px=max_new_point_max_error_px,
+        ):
+            skipped_new_point_error_policy += 1
+            continue
 
         inlier_observations = [observations[int(index)] for index in result.inlier_indices]
         color_source = inlier_observations[0]
@@ -478,6 +555,7 @@ def main() -> int:
     report = {
         "scene_name": scene["scene_name"],
         "rt_stage": args.stage,
+        "rt_policy": rt_policy["rt_policy"],
         "residual_report_path": residual_report_path,
         "residual_observations_scored": int(residual_observations_scored),
         "max_observation_error": float(args.max_observation_error),
@@ -502,6 +580,7 @@ def main() -> int:
         "skipped_no_valid_view_pair_tracks": int(skipped_no_valid_view_pair),
         "skipped_geometry_tracks": int(skipped_geometry),
         "skipped_observations_by_residual": int(skipped_observations_by_residual),
+        "skipped_new_point_error_policy": int(skipped_new_point_error_policy),
         "track_merge_implemented": True,
         "track_merge_enabled": bool(args.enable_track_merge),
         "merged_tracks": int(merged_tracks),
@@ -509,11 +588,14 @@ def main() -> int:
         "rejected_merge_short": int(rejected_merge_short),
         "rejected_merge_no_valid_pair": int(rejected_merge_no_valid_pair),
         "rejected_merge_geometry": int(rejected_merge_geometry),
+        "rejected_merge_error_policy": int(rejected_merge_error_policy),
         "median_new_point_reprojection_error": float(np.median(new_point_errors)) if new_point_errors else 0.0,
         "mean_new_point_reprojection_error": float(np.mean(new_point_errors)) if new_point_errors else 0.0,
         "median_new_point_angle_deg": float(np.median(new_point_angles)) if new_point_angles else 0.0,
         "mean_new_point_angle_deg": float(np.mean(new_point_angles)) if new_point_angles else 0.0,
         "max_reproj_error_px": max_reproj_error_px,
+        "max_new_point_median_error_px": max_new_point_median_error_px,
+        "max_new_point_max_error_px": max_new_point_max_error_px,
         "min_triangulation_angle_deg": min_angle_deg,
         "min_track_length": min_track_length,
         "state_path": str(state_path),
