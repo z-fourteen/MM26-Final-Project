@@ -13,8 +13,10 @@ from src.sfm.reconstruction import ReconstructionState
 
 @dataclass(frozen=True)
 class BundleAdjustmentProblem:
+    scope: str
     image_names: list[str]
     fixed_image_name: str
+    local_image_names: list[str]
     optimizable_image_names: list[str]
     point_ids: np.ndarray
     observations: list[dict]
@@ -47,7 +49,20 @@ def build_bundle_adjustment_problem(
     max_points: int,
     max_observations: int,
     min_track_length: int,
+    scope: str = "global",
+    local_image_names: list[str] | None = None,
 ) -> BundleAdjustmentProblem:
+    if scope not in {"global", "local"}:
+        raise ValueError(f"Unsupported BA scope: {scope}")
+    if fixed_image_name not in state.registered_images:
+        raise ValueError(f"Fixed image is not registered: {fixed_image_name}")
+
+    local_image_set = set(local_image_names or [])
+    if scope == "local":
+        local_image_set = {image_name for image_name in local_image_set if image_name in state.registered_images}
+        if not local_image_set:
+            raise ValueError("Local BA requires at least one registered local image.")
+
     point_observations: dict[int, list[dict]] = {}
     for observation in state.observations:
         point_id = int(observation["point3D_id"])
@@ -61,6 +76,7 @@ def build_bundle_adjustment_problem(
         point_id
         for point_id, observations in point_observations.items()
         if len(observations) >= min_track_length
+        and (scope == "global" or any(str(observation["image_name"]) in local_image_set for observation in observations))
     ]
     eligible_point_ids.sort(key=lambda point_id: len(point_observations[point_id]), reverse=True)
     if max_points > 0:
@@ -73,6 +89,11 @@ def build_bundle_adjustment_problem(
         for observation in state.observations
         if int(observation["point3D_id"]) in selected_point_id_set
         and str(observation["image_name"]) in state.registered_images
+        and (
+            scope == "global"
+            or str(observation["image_name"]) in local_image_set
+            or int(observation["point3D_id"]) in selected_point_id_set
+        )
     ]
     observations.sort(key=lambda item: (int(item["point3D_id"]), str(item["image_name"]), int(item["keypoint_idx"])))
     if max_observations > 0:
@@ -82,11 +103,15 @@ def build_bundle_adjustment_problem(
             dtype=np.int32,
         )
 
-    if fixed_image_name not in state.registered_images:
-        raise ValueError(f"Fixed image is not registered: {fixed_image_name}")
-
     image_names = list(state.registered_images)
-    optimizable_image_names = [image_name for image_name in image_names if image_name != fixed_image_name]
+    if scope == "global":
+        optimizable_image_names = [image_name for image_name in image_names if image_name != fixed_image_name]
+    else:
+        optimizable_image_names = [
+            image_name
+            for image_name in image_names
+            if image_name in local_image_set and image_name != fixed_image_name
+        ]
     params: list[float] = []
     camera_param_slices: dict[str, slice] = {}
     for image_name in optimizable_image_names:
@@ -112,8 +137,10 @@ def build_bundle_adjustment_problem(
     )
 
     return BundleAdjustmentProblem(
+        scope=scope,
         image_names=image_names,
         fixed_image_name=fixed_image_name,
+        local_image_names=sorted(local_image_set),
         optimizable_image_names=optimizable_image_names,
         point_ids=selected_point_ids,
         observations=observations,
@@ -135,6 +162,8 @@ def run_bundle_adjustment(
     max_points: int,
     max_observations: int,
     min_track_length: int,
+    scope: str = "global",
+    local_image_names: list[str] | None = None,
 ) -> BundleAdjustmentResult:
     problem = build_bundle_adjustment_problem(
         state=state,
@@ -143,6 +172,8 @@ def run_bundle_adjustment(
         max_points=max_points,
         max_observations=max_observations,
         min_track_length=min_track_length,
+        scope=scope,
+        local_image_names=local_image_names,
     )
     if problem.initial_params.size == 0 or not problem.observations:
         raise ValueError("Bundle adjustment problem is empty.")
@@ -173,6 +204,47 @@ def run_bundle_adjustment(
         success=bool(result.success),
         message=str(result.message),
     )
+
+
+def build_covisibility_graph(state: ReconstructionState) -> dict[tuple[str, str], int]:
+    point_images: dict[int, set[str]] = {}
+    for observation in state.observations:
+        point_id = int(observation["point3D_id"])
+        image_name = str(observation["image_name"])
+        if point_id < 0 or point_id >= int(state.points3d.shape[0]):
+            continue
+        if image_name not in state.registered_images:
+            continue
+        point_images.setdefault(point_id, set()).add(image_name)
+
+    edges: dict[tuple[str, str], int] = {}
+    for image_names in point_images.values():
+        sorted_names = sorted(image_names)
+        for i, image_name1 in enumerate(sorted_names):
+            for image_name2 in sorted_names[i + 1 :]:
+                key = (image_name1, image_name2)
+                edges[key] = edges.get(key, 0) + 1
+    return edges
+
+
+def select_local_ba_images(
+    state: ReconstructionState,
+    target_image_name: str,
+    num_neighbors: int,
+) -> list[str]:
+    if target_image_name not in state.registered_images:
+        raise ValueError(f"Target image is not registered: {target_image_name}")
+    covisibility = build_covisibility_graph(state)
+    neighbor_weights: dict[str, int] = {}
+    for (image_name1, image_name2), weight in covisibility.items():
+        if image_name1 == target_image_name:
+            neighbor_weights[image_name2] = neighbor_weights.get(image_name2, 0) + weight
+        elif image_name2 == target_image_name:
+            neighbor_weights[image_name1] = neighbor_weights.get(image_name1, 0) + weight
+    neighbors = sorted(neighbor_weights, key=lambda image_name: (-neighbor_weights[image_name], image_name))
+    if num_neighbors > 0:
+        neighbors = neighbors[:num_neighbors]
+    return [target_image_name, *neighbors]
 
 
 def squared_residual_cost(residuals: np.ndarray) -> float:

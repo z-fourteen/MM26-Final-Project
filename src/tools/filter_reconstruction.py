@@ -76,9 +76,9 @@ def main() -> int:
 
 
 def load_ba_observation_errors(ba_report: dict) -> tuple[list[dict], np.ndarray]:
-    records = ba_report.get("optimized_observation_errors", [])
+    records = ba_report.get("observation_errors", ba_report.get("optimized_observation_errors", []))
     if not records:
-        raise ValueError("BA report does not contain optimized_observation_errors.")
+        raise ValueError("Residual report does not contain observation_errors or optimized_observation_errors.")
     observations = [
         {
             "point3D_id": int(record["point3D_id"]),
@@ -87,7 +87,10 @@ def load_ba_observation_errors(ba_report: dict) -> tuple[list[dict], np.ndarray]
         }
         for record in records
     ]
-    errors = np.asarray([float(record["final_error"]) for record in records], dtype=np.float64)
+    errors = np.asarray(
+        [float(record["final_error"] if "final_error" in record else record["reprojection_error"]) for record in records],
+        dtype=np.float64,
+    )
     return observations, errors
 
 

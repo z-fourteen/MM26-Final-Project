@@ -1440,3 +1440,369 @@ Phase 7B.2 full residual evaluation + second-pass filtering
 - 内参 refinement。
 - 更系统的 outlier filtering。
 - 与 Phase 5C / 6B 的再次闭环验证。
+
+---
+
+## 18. Phase 7B.2 Registered-observation Residual Evaluation
+
+### 18.1 执行动机
+
+Phase 7B 第一版只过滤 BA 子问题覆盖到的 observation，也就是 `optimized_observation_errors` 中出现的部分观测。这个机制可以验证 BA-based filtering 是否可行，但不能说明当前所有已注册图像上的 observation 都已经干净。
+
+因此本阶段不使用 `full` 命名，而是明确限定为：
+
+```text
+registered-observation residual evaluation
+```
+
+含义是：只在当前已经 registered 的图像和当前 reconstruction state 中已有的 observations 上计算 reprojection residual。它不是全数据集范围，也不是所有未注册图像范围。
+
+### 18.2 已完成内容
+
+新增/修改代码：
+
+- `src/tools/evaluate_registered_residuals.py`
+  - 遍历当前 reconstruction state 中所有 observations。
+  - 只评估已经 registered 的图像。
+  - 对每条 observation 计算 reprojection error。
+  - 输出 `registered_residual_report.json` 风格报告。
+- `src/tools/filter_reconstruction.py`
+  - 支持读取 `observation_errors`。
+  - 兼容旧的 `optimized_observation_errors`。
+
+### 18.3 运行命令
+
+过滤前 registered-observation residual evaluation：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name registered_residual_before_filtering_report.json
+```
+
+基于 registered residual 的过滤：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.filter_reconstruction \
+  --scene configs/scenes/south_building_small.yaml \
+  --ba-report outputs\south_building_small\reports\registered_residual_before_filtering_report.json \
+  --max-reprojection-error 8.0 \
+  --max-point-median-error 8.0 \
+  --max-point-max-error 32.0 \
+  --min-track-length 2 \
+  --report-name registered_residual_filtering_report.json
+```
+
+过滤后 registered-observation residual evaluation：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name registered_residual_after_filtering_report.json
+```
+
+过滤后 BA 验证：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 800 \
+  --max-observations 3000 \
+  --min-track-length 2 \
+  --report-name bundle_adjustment_after_registered_residual_filtering_report.json
+```
+
+### 18.4 验收结果
+
+注意：由于前一轮 Phase 7B 执行时旧备份文件曾被同名覆盖，当前 Phase 7B.2 是在已经初步过滤后的 16-image reconstruction state 上继续执行，而不是从最原始 7B 前状态重新开始。
+
+过滤前 registered-observation residual：
+
+```text
+Registered images: 16
+Points3D: 3890
+Observations evaluated: 11209 / 11209
+
+Mean reprojection error:   1.867 px
+Median reprojection error: 1.239 px
+P90 reprojection error:    4.047 px
+P95 reprojection error:    5.259 px
+Max reprojection error:    373.195 px
+Observations > 4 px:       1149
+Observations > 8 px:       74
+Observations > 16 px:      27
+```
+
+Registered residual filtering：
+
+```text
+Observations: 11209 -> 11076
+Points3D: 3890 -> 3848
+Removed observations by reprojection: 74
+Removed points by track length: 25
+Removed points by error: 20
+Removed points total: 42
+```
+
+过滤后 registered-observation residual：
+
+```text
+Points3D: 3848
+Observations evaluated: 11076 / 11076
+
+Mean reprojection error:   1.706 px
+Median reprojection error: 1.228 px
+P90 reprojection error:    3.906 px
+P95 reprojection error:    5.034 px
+Max reprojection error:    7.999 px
+Observations > 4 px:       1049
+Observations > 8 px:       0
+Observations > 16 px:      0
+```
+
+过滤后 BA 验证：
+
+```text
+Optimized points: 576 / 3848
+Optimized observations: 3000 / 11076
+
+Median reprojection error: 1.330 -> 1.331 px
+Mean reprojection error:   1.707 -> 1.702 px
+P95 reprojection error:    4.688 -> 4.689 px
+Observations > 8 px:       0 -> 0
+```
+
+### 18.5 当前结论
+
+Phase 7B.2 比 7B 第一版更能说明 filtering 的效果，因为它不再只看 BA 子问题，而是评估了当前已注册图像上的全部 observations。
+
+结论应表述为：
+
+```text
+Registered-observation filtering effectively removes remaining large residual outliers.
+```
+
+而不是：
+
+```text
+BA brings a large additional improvement after filtering.
+```
+
+过滤之后，registered observations 中 `>8px` 和 `>16px` 的大误差项都降为 0，最大误差从约 `373 px` 降到约 `8 px` 以下；但过滤后 BA 只带来很小的连续优化收益，说明当前主要收益来自离群观测清理，而不是 BA 对相机/点的进一步微调。
+
+下一步更适合进入：
+
+```text
+Phase 7C Local / Global BA policy comparison
+```
+
+在进入 Phase 7D 内参优化前，仍建议先完成 7C，因为内参 refinement 应建立在相对干净的 observation graph 和明确的 BA 策略之上。
+
+---
+
+## 19. Phase 7C Local / Global BA Scheduling
+
+### 19.1 执行动机
+
+论文 4.4 的 BA 模块并不是只做一次全局 BA，而是明确区分：
+
+```text
+local BA:
+  after each image registration
+  optimize the set of most-connected images
+
+global BA:
+  after the model grows by a certain percentage
+```
+
+因此在实现 pre-BA RT / post-BA RT 迭代之前，必须先补上 local/global BA 的调度骨架。否则后续无法正确表达：
+
+```text
+pre-BA RT -> global BA -> filtering -> post-BA RT -> BA -> filtering
+```
+
+### 19.2 已完成内容
+
+新增/修改代码：
+
+- `src/sfm/bundle_adjustment.py`
+  - `BundleAdjustmentProblem` 新增 `scope` 和 `local_image_names`。
+  - `build_bundle_adjustment_problem` 支持 `scope = global | local`。
+  - 新增 `build_covisibility_graph`，按 shared point3D count 统计 registered image 共视边。
+  - 新增 `select_local_ba_images`，从 target image 选择 top-K most-connected registered neighbors。
+  - local BA 中只优化 local image poses 和相关 points；非 local registered cameras 固定，但其 observations 可作为约束参与 residual。
+- `src/tools/run_bundle_adjustment.py`
+  - 新增 `--scope global|local`。
+  - 新增 `--target-image`。
+  - 新增 `--local-neighbors`。
+  - BA report 记录 `ba_scope`、`target_image_name`、`local_image_names`、`optimized_image_names`、`num_covisibility_edges`。
+
+### 19.3 运行命令
+
+Phase 7C baseline registered residual：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name phase7c_registered_residual_baseline_report.json
+```
+
+Local BA，对 `P1180157.JPG` 及其共视邻居执行：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --scope local \
+  --target-image P1180157.JPG \
+  --local-neighbors 6 \
+  --max-iterations 30 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 500 \
+  --max-observations 2500 \
+  --min-track-length 2 \
+  --report-name phase7c_local_ba_p1180157_report.json
+```
+
+Local BA 后 registered residual：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name phase7c_registered_residual_after_local_ba_report.json
+```
+
+Global BA：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.run_bundle_adjustment \
+  --scene configs/scenes/south_building_small.yaml \
+  --scope global \
+  --max-iterations 40 \
+  --loss cauchy \
+  --f-scale 4.0 \
+  --max-points 900 \
+  --max-observations 4000 \
+  --min-track-length 2 \
+  --report-name phase7c_global_ba_report.json
+```
+
+Global BA 后 registered residual：
+
+```bash
+D:\06_envs\mm26\python.exe -m src.tools.evaluate_registered_residuals \
+  --scene configs/scenes/south_building_small.yaml \
+  --report-name phase7c_registered_residual_after_global_ba_report.json
+```
+
+### 19.4 验收结果
+
+本阶段从 Phase 7B.2 后的 16-image、已过滤 reconstruction state 出发。
+
+Baseline registered residual：
+
+```text
+Observations evaluated: 11076 / 11076
+Mean reprojection error:   1.709 px
+Median reprojection error: 1.235 px
+P90 reprojection error:    3.884 px
+P95 reprojection error:    5.053 px
+Max reprojection error:    8.164 px
+Observations > 4 px:       1025
+Observations > 8 px:       8
+Observations > 16 px:      0
+```
+
+Local BA 选择结果：
+
+```text
+Target image: P1180157.JPG
+Local images:
+  P1180150.JPG
+  P1180151.JPG
+  P1180154.JPG
+  P1180156.JPG
+  P1180157.JPG
+Fixed image: P1180150.JPG
+Optimized cameras: 4
+Optimized points: 431
+Optimized observations: 2500
+```
+
+Local BA 子问题误差：
+
+```text
+Median reprojection error: 1.082 -> 1.071 px
+Mean reprojection error:   1.547 -> 1.538 px
+P95 reprojection error:    4.745 -> 4.722 px
+Observations > 8 px:       1 -> 1
+```
+
+Local BA 后 registered residual：
+
+```text
+Mean reprojection error:   1.699 px
+Median reprojection error: 1.231 px
+P95 reprojection error:    4.862 px
+Observations > 8 px:       6
+```
+
+Global BA 子问题：
+
+```text
+Fixed image: P1180142.JPG
+Optimized cameras: 15
+Optimized points: 807
+Optimized observations: 4000
+```
+
+Global BA 子问题误差：
+
+```text
+Median reprojection error: 1.249 -> 1.235 px
+Mean reprojection error:   1.633 -> 1.613 px
+P95 reprojection error:    4.390 -> 4.390 px
+Observations > 8 px:       1 -> 1
+```
+
+Global BA 后 registered residual：
+
+```text
+Mean reprojection error:   1.638 px
+Median reprojection error: 1.170 px
+P95 reprojection error:    4.837 px
+Observations > 8 px:       2
+```
+
+### 19.5 当前结论
+
+Phase 7C 已补上论文 BA 模块中的 local/global BA 区分：
+
+- Local BA 能对目标图像邻域带来小幅改善，运行规模更小，符合“每次注册后局部优化”的定位。
+- Global BA 覆盖更多相机和观测，对 registered residual 的整体改善更明显，但运行代价更高，符合“模型增长到一定比例后触发”的定位。
+
+当前仍未实现论文 4.4 中的完整迭代：
+
+```text
+pre-BA RT
+global BA
+filtering
+post-BA RT
+BA
+filtering
+repeat until filtered observations and post-BA RT points diminish
+```
+
+下一步应进入：
+
+```text
+Phase 7D Paper-style BA / RT / Filtering Iterative Refinement
+```
+
+其中重点是把已有的 registered-track triangulation 改造成：
+
+- pre-BA RT：global BA 前重新三角化以补偿 drift。
+- post-BA RT：BA 改善 pose/points 后，继续之前失败的 tracks；只使用 residual 低于 filtering threshold 的 observations，并尝试 merge tracks。

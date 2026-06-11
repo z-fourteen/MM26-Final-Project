@@ -7,7 +7,13 @@ from pathlib import Path
 
 import numpy as np
 
-from src.sfm.bundle_adjustment import error_distribution, per_image_error_summary, run_bundle_adjustment
+from src.sfm.bundle_adjustment import (
+    build_covisibility_graph,
+    error_distribution,
+    per_image_error_summary,
+    run_bundle_adjustment,
+    select_local_ba_images,
+)
 from src.sfm.camera import estimate_simple_pinhole
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
@@ -25,6 +31,9 @@ def main() -> int:
     parser.add_argument("--max-observations", type=int, default=8000)
     parser.add_argument("--min-track-length", type=int, default=2)
     parser.add_argument("--focal-scale", type=float, default=1.2)
+    parser.add_argument("--scope", default="global", choices=["global", "local"])
+    parser.add_argument("--target-image", default="", help="Target registered image for local BA.")
+    parser.add_argument("--local-neighbors", type=int, default=6)
     parser.add_argument("--report-name", default="bundle_adjustment_report.json")
     parser.add_argument("--dry-run", action="store_true", help="Run BA and report metrics without writing optimized state.")
     args = parser.parse_args()
@@ -52,7 +61,21 @@ def main() -> int:
         width, height = [int(value) for value in feature_data["image_size"]]
         cameras[image_path.name] = estimate_simple_pinhole(width, height, focal_scale=args.focal_scale)
 
-    fixed_image_name = next(iter(state.registered_images))
+    local_image_names = []
+    target_image_name = args.target_image
+    if args.scope == "local":
+        if not target_image_name:
+            target_image_name = next(reversed(state.registered_images))
+        local_image_names = select_local_ba_images(
+            state=state,
+            target_image_name=target_image_name,
+            num_neighbors=args.local_neighbors,
+        )
+        fixed_image_name = local_image_names[1] if len(local_image_names) > 1 else local_image_names[0]
+    else:
+        fixed_image_name = next(iter(state.registered_images))
+    covisibility_edges = build_covisibility_graph(state)
+
     result = run_bundle_adjustment(
         state=state,
         cameras=cameras,
@@ -64,6 +87,8 @@ def main() -> int:
         max_points=args.max_points,
         max_observations=args.max_observations,
         min_track_length=args.min_track_length,
+        scope=args.scope,
+        local_image_names=local_image_names,
     )
 
     backup_paths = {}
@@ -81,9 +106,15 @@ def main() -> int:
     report = {
         "scene_name": scene["scene_name"],
         "dry_run": bool(args.dry_run),
+        "ba_scope": args.scope,
+        "target_image_name": target_image_name,
+        "local_neighbors": args.local_neighbors,
+        "local_image_names": result.problem.local_image_names,
         "fixed_image_name": fixed_image_name,
         "num_registered_images": len(result.problem.image_names),
         "num_optimized_cameras": len(result.problem.optimizable_image_names),
+        "optimized_image_names": result.problem.optimizable_image_names,
+        "num_covisibility_edges": len(covisibility_edges),
         "num_points_total": int(state.points3d.shape[0]),
         "num_points_optimized": int(result.problem.point_ids.shape[0]),
         "num_observations_total": len(state.observations),
@@ -140,6 +171,10 @@ def main() -> int:
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"Scene: {scene['scene_name']}")
+    print(f"BA scope: {report['ba_scope']}")
+    if args.scope == "local":
+        print(f"Target image: {report['target_image_name']}")
+        print(f"Local images: {', '.join(report['local_image_names'])}")
     print(f"Images optimized/fixed: {report['num_optimized_cameras']} / 1")
     print(f"Points optimized: {report['num_points_optimized']} / {report['num_points_total']}")
     print(f"Observations optimized: {report['num_observations_optimized']} / {report['num_observations_total']}")
