@@ -22,6 +22,9 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+import math
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -39,6 +42,75 @@ try:
     SPARSE_ADAM_AVAILABLE = True
 except:
     SPARSE_ADAM_AVAILABLE = False
+
+
+# 新增
+def build_sfm_depth_map(viewpoint_cam, gaussians, render_pkg, device="cuda"):
+    """
+    从SfM稀疏点云构建稀疏深度图和对应mask。
+    将3D高斯球的均值（即SfM点云位置）投影到当前视角，
+    只保留在图像范围内且深度为正的点。
+    返回:
+        sfm_depth_map: (H, W) 稀疏深度图，无效位置为0
+        sfm_mask:      (H, W) bool mask，True表示该像素有有效SfM深度
+    """
+    H = viewpoint_cam.image_height
+    W = viewpoint_cam.image_width
+
+    # 取所有高斯球的3D位置（SfM点云）
+    pts_3d = gaussians.get_xyz.detach()  # (N, 3)
+
+    # 变换到相机坐标系
+    world_view = viewpoint_cam.world_view_transform  # (4, 4), column-major
+    pts_h = torch.cat([pts_3d, torch.ones(pts_3d.shape[0], 1, device=device)], dim=1)  # (N, 4)
+    pts_cam = (pts_h @ world_view)  # (N, 4)
+
+    z = pts_cam[:, 2]  # 相机空间深度
+
+    # 只保留在相机前方的点
+    valid = z > 0.01
+    pts_cam = pts_cam[valid]
+    z = z[valid]
+
+    # 投影到像素坐标
+    tanfovx = math.tan(viewpoint_cam.FoVx * 0.5)
+    tanfovy = math.tan(viewpoint_cam.FoVy * 0.5)
+    fx = W / (2.0 * tanfovx)
+    fy = H / (2.0 * tanfovy)
+    cx = W / 2.0
+    cy = H / 2.0
+
+    x_cam = pts_cam[:, 0]
+    y_cam = pts_cam[:, 1]
+
+    u = (x_cam / z) * fx + cx  # (M,)
+    v = (y_cam / z) * fy + cy  # (M,)
+
+    u_int = u.round().long()
+    v_int = v.round().long()
+
+    # 过滤出在图像范围内的点
+    in_bounds = (u_int >= 0) & (u_int < W) & (v_int >= 0) & (v_int < H)
+    u_int = u_int[in_bounds]
+    v_int = v_int[in_bounds]
+    z_valid = z[in_bounds]
+
+    # 构建稀疏深度图（同一像素有多个点时取最小深度，即最近点）
+    sfm_depth_map = torch.zeros(H, W, device=device)
+    sfm_mask = torch.zeros(H, W, dtype=torch.bool, device=device)
+
+    # 用scatter取最近点（从远到近写入，近的覆盖远的）
+    # 先按深度从大到小排序
+    sort_idx = torch.argsort(z_valid, descending=True)
+    u_sorted = u_int[sort_idx]
+    v_sorted = v_int[sort_idx]
+    z_sorted = z_valid[sort_idx]
+
+    sfm_depth_map[v_sorted, u_sorted] = z_sorted
+    sfm_mask[v_sorted, u_sorted] = True
+
+    return sfm_depth_map, sfm_mask
+
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
@@ -139,6 +211,43 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             Ll1depth = 0
 
+
+        # 新增
+        # ── SfM稀疏深度先验损失 ──────────────────────────────────────────
+        # 只在前期迭代施加（densification结束前几何还在剧烈变化，后期可选关闭）
+        lambda_depth_sfm = 0.01  # 权重超参数，可调：0.05~0.2
+        sfm_depth_start  = 1000       # 从第几次iteration开始施加
+        sfm_depth_end    = opt.densify_until_iter  # 到densify结束时停止
+
+        Ll1depth_sfm = 0.0
+        if sfm_depth_start <= iteration <= sfm_depth_end:
+            rendered_depth = render_pkg["depth"]  # (1, H, W) 或 (H, W)，渲染深度图
+
+            # 统一shape为 (H, W)
+            if rendered_depth.dim() == 3:
+                rendered_depth = rendered_depth.squeeze(0)
+
+            # 构建SfM稀疏深度图和mask
+            sfm_depth_map, sfm_mask = build_sfm_depth_map(viewpoint_cam, gaussians, render_pkg)
+
+            if sfm_mask.sum() > 10:  # 至少有10个有效投影点才计算
+                rendered_at_sfm = rendered_depth[sfm_mask]      # 只取有SfM深度的像素
+                sfm_gt_at_mask  = sfm_depth_map[sfm_mask]       # 对应的SfM真实深度
+
+                # 对齐尺度：SfM深度和渲染深度可能有全局尺度偏差
+                # 用中位数比值做尺度对齐，避免被outlier带偏
+                with torch.no_grad():
+                    scale = torch.median(sfm_gt_at_mask) / (torch.median(rendered_at_sfm) + 1e-6)
+
+                Ll1depth_sfm = lambda_depth_sfm * torch.abs(
+                    rendered_at_sfm * scale - sfm_gt_at_mask
+                ).mean()
+
+                loss = loss + Ll1depth_sfm
+                Ll1depth_sfm = Ll1depth_sfm.item()
+        # ── SfM稀疏深度先验损失 end ─────────────────────────────────────
+        
+
         loss.backward()
 
         iter_end.record()
@@ -148,8 +257,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
 
+            
+            # 修改
+            ema_Ll1depth_sfm_for_log = 0.4 * (Ll1depth_sfm if isinstance(Ll1depth_sfm, float) else Ll1depth_sfm) + 0.6 * getattr(training, '_ema_sfm_depth', 0.0)
+            training._ema_sfm_depth = ema_Ll1depth_sfm_for_log
+
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Depth Loss": f"{ema_Ll1depth_for_log:.{7}f}"})
+                progress_bar.set_postfix({
+                    "Loss": f"{ema_loss_for_log:.{7}f}",
+                    "DepthMono": f"{ema_Ll1depth_for_log:.{7}f}",
+                    "DepthSfM": f"{ema_Ll1depth_sfm_for_log:.{7}f}"
+                })
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
