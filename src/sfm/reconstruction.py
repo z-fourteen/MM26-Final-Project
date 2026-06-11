@@ -43,6 +43,17 @@ class Candidate2D3D:
 
 
 @dataclass(frozen=True)
+class NextBestViewScore:
+    image_name: str
+    pyramid_score: float
+    num_2d3d: int
+    registered_neighbor_count: int
+    num_general_edges: int
+    num_planar_edges: int
+    mean_homography_ratio: float
+
+
+@dataclass(frozen=True)
 class RegistrationResult:
     image_name: str
     success: bool
@@ -199,6 +210,93 @@ def _find_verified_path(verified_dir: Path, image_name_a: str, image_name_b: str
         if path.exists():
             return path
     return None
+
+
+def image_pyramid_visibility_score(
+    points2d: np.ndarray,
+    image_width: int,
+    image_height: int,
+    levels: int = 3,
+) -> float:
+    if points2d.size == 0:
+        return 0.0
+    width = max(int(image_width), 1)
+    height = max(int(image_height), 1)
+    clamped = points2d.astype(np.float64, copy=False)
+    xs = np.clip(clamped[:, 0], 0.0, np.nextafter(float(width), 0.0))
+    ys = np.clip(clamped[:, 1], 0.0, np.nextafter(float(height), 0.0))
+    score = 0.0
+    for level in range(levels + 1):
+        cells_per_axis = 2**level
+        x_cells = np.floor(xs / float(width) * cells_per_axis).astype(np.int32)
+        y_cells = np.floor(ys / float(height) * cells_per_axis).astype(np.int32)
+        x_cells = np.clip(x_cells, 0, cells_per_axis - 1)
+        y_cells = np.clip(y_cells, 0, cells_per_axis - 1)
+        occupied = set(zip(x_cells.tolist(), y_cells.tolist()))
+        weight = float(cells_per_axis**2)
+        score += weight * float(len(occupied))
+    return score
+
+
+def score_next_best_view(
+    candidate: Candidate2D3D,
+    camera: PinholeCamera,
+    verified_dir: Path,
+    registered_image_names: set[str],
+    levels: int = 3,
+) -> NextBestViewScore:
+    diagnostics = scene_graph_registration_diagnostics(
+        image_name=candidate.image_name,
+        verified_dir=verified_dir,
+        registered_image_names=registered_image_names,
+    )
+    return NextBestViewScore(
+        image_name=candidate.image_name,
+        pyramid_score=image_pyramid_visibility_score(
+            candidate.points2d,
+            image_width=camera.width,
+            image_height=camera.height,
+            levels=levels,
+        ),
+        num_2d3d=candidate.num_correspondences,
+        registered_neighbor_count=diagnostics["registered_neighbor_count"],
+        num_general_edges=diagnostics["num_general_edges"],
+        num_planar_edges=diagnostics["num_planar_edges"],
+        mean_homography_ratio=diagnostics["mean_homography_ratio"],
+    )
+
+
+def scene_graph_registration_diagnostics(
+    image_name: str,
+    verified_dir: Path,
+    registered_image_names: set[str],
+) -> dict[str, int | float]:
+    homography_ratios = []
+    registered_neighbor_count = 0
+    num_general_edges = 0
+    num_planar_edges = 0
+    for registered_name in registered_image_names:
+        verified_path = _find_verified_path(verified_dir, image_name, registered_name)
+        if verified_path is None:
+            continue
+        data = np.load(verified_path)
+        status = str(data["status"])
+        if status not in {"verified", "verified_planar"}:
+            continue
+        registered_neighbor_count += 1
+        model_type = str(data["model_type"]) if "model_type" in data else "unknown"
+        if model_type == "general":
+            num_general_edges += 1
+        elif model_type == "planar":
+            num_planar_edges += 1
+        if "homography_ratio" in data:
+            homography_ratios.append(float(data["homography_ratio"]))
+    return {
+        "registered_neighbor_count": registered_neighbor_count,
+        "num_general_edges": num_general_edges,
+        "num_planar_edges": num_planar_edges,
+        "mean_homography_ratio": float(np.mean(homography_ratios)) if homography_ratios else 0.0,
+    }
 
 
 def register_image_pnp(

@@ -900,3 +900,105 @@ Phase 6B registered-track triangulation
 ```
 
 这样才能评估更强前端初始化对完整增量重建链路的真实影响。
+
+---
+
+## 14. Phase 5C Next Best View Scoring
+
+### 14.1 执行动机
+
+前一版 Phase 5A/5B 的图像注册顺序主要按 2D-3D correspondence 数量排序。论文 *Structure-from-Motion Revisited* 中的 next best view selection 更强调可见 3D 点在候选图像平面上的空间分布，因为 PnP 稳定性不仅取决于点数，也取决于点是否覆盖图像不同区域。
+
+本轮 Phase 5C 按论文思想实现 pyramid visibility scoring：
+
+```text
+K_l = 2^l
+w_l = K_l^2
+score(I) = sum_l w_l * occupied_cells_l(I)
+```
+
+其中 `occupied_cells_l` 表示第 `l` 层网格中被 2D-3D 点占据的 cell 数量。
+
+### 14.2 已完成内容
+
+新增/修改代码：
+
+- `src/sfm/reconstruction.py`
+  - 新增 `image_pyramid_visibility_score`。
+  - 新增 `score_next_best_view`。
+  - 新增 scene graph 诊断信息统计，但仅用于报告，不参与主排序。
+- `src/tools/register_images.py`
+  - 注册候选排序改为：
+
+```text
+primary key: pyramid_visibility_score
+tie-breaker: num_2d3d
+```
+
+  - `num_2d3d < min_2d3d` 的候选只进入报告诊断，不再执行 PnP。
+  - 每轮报告 top candidates，包括 eligibility、pyramid score、num_2d3d、scene graph 诊断字段。
+
+### 14.3 运行命令
+
+由于 Phase 4B 已重新初始化，本轮先重置到 Phase 4B，然后运行 Phase 5C：
+
+```bash
+conda run -n mm26 python -m src.tools.initialize_reconstruction \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-candidate-pairs 20
+
+conda run -n mm26 python -m src.tools.register_images \
+  --scene configs/scenes/south_building_small.yaml \
+  --max-register 20 \
+  --min-2d3d 30 \
+  --min-pnp-inliers 20 \
+  --visibility-levels 3 \
+  --top-candidates 5
+```
+
+### 14.4 验收结果
+
+Phase 5C 从 Phase 4B 的两视图初始化出发：
+
+```text
+Initial registered images: 2
+Final registered images: 10
+Successful registrations: 8
+Failed registrations: 0
+Points3D: 1775
+Observations: 3550 -> 5210
+Selection method: phase5c_pyramid_visibility
+Visibility levels: 3
+```
+
+注册顺序：
+
+```text
+1  P1180141.JPG  num_2d3d=933  inliers=927  score=3073  mean_error=1.746 px
+2  P1180144.JPG  num_2d3d=538  inliers=444  score=2369  mean_error=1.247 px
+3  P1180145.JPG  num_2d3d=71   inliers=50   score=1649  mean_error=2.237 px
+4  P1180152.JPG  num_2d3d=66   inliers=56   score=585   mean_error=3.050 px
+5  P1180149.JPG  num_2d3d=54   inliers=51   score=605   mean_error=1.897 px
+6  P1180148.JPG  num_2d3d=49   inliers=49   score=457   mean_error=1.628 px
+7  P1180150.JPG  num_2d3d=41   inliers=38   score=381   mean_error=2.027 px
+8  P1180151.JPG  num_2d3d=45   inliers=45   score=297   mean_error=2.645 px
+```
+
+对比旧 Phase 5A：
+
+```text
+Old Phase 5A: 2 -> 7 registered images
+New Phase 5C: 2 -> 10 registered images
+```
+
+### 14.5 当前结论
+
+Phase 5C 的 next best view selection 已经按论文核心思想从“点数量优先”改为“图像平面分布优先”。scene graph 的 `model_type / homography_ratio` 等信息暂时只用于报告诊断，不进入 NBV 主评分，避免引入过多自定义 heuristic。
+
+当前停止原因不是 PnP 失败，而是剩余候选不足 `min_2d3d = 30`。因此下一步应进入：
+
+```text
+Phase 6B Registered-track Triangulation
+```
+
+目标是利用当前 10 张已注册图像重新三角化，扩展点云覆盖范围，然后继续 Phase 5C 注册。

@@ -12,11 +12,14 @@ from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
 from src.sfm.matching import load_features
 from src.sfm.reconstruction import (
+    Candidate2D3D,
+    NextBestViewScore,
     add_registered_image,
     collect_candidate_correspondences,
     load_reconstruction_state,
     register_image_pnp,
     save_reconstruction_state,
+    score_next_best_view,
 )
 
 
@@ -27,6 +30,8 @@ def main() -> int:
     parser.add_argument("--min-2d3d", type=int, default=30)
     parser.add_argument("--min-pnp-inliers", type=int, default=20)
     parser.add_argument("--focal-scale", type=float, default=1.2)
+    parser.add_argument("--visibility-levels", type=int, default=3)
+    parser.add_argument("--top-candidates", type=int, default=5)
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -68,8 +73,9 @@ def main() -> int:
     failed_images: set[str] = set()
     registrations = []
 
-    for _iteration in range(args.max_register):
+    for iteration in range(args.max_register):
         candidates = []
+        scored_candidates: list[tuple[Candidate2D3D, NextBestViewScore]] = []
         for image_path in images:
             image_name = image_path.name
             if image_name in state.registered_images or image_name in failed_images:
@@ -81,12 +87,28 @@ def main() -> int:
                 keypoints_by_name=keypoints_by_name,
             )
             candidates.append(candidate)
+            score = score_next_best_view(
+                candidate=candidate,
+                camera=cameras[image_name],
+                verified_dir=verified_dir,
+                registered_image_names=set(state.registered_images),
+                levels=args.visibility_levels,
+            )
+            scored_candidates.append((candidate, score))
 
         if not candidates:
             break
 
-        candidates.sort(key=lambda item: item.num_correspondences, reverse=True)
-        best_candidate = candidates[0]
+        scored_candidates.sort(key=lambda item: (item[1].pyramid_score, item[1].num_2d3d), reverse=True)
+        eligible_candidates = [
+            (candidate, score)
+            for candidate, score in scored_candidates
+            if candidate.num_correspondences >= args.min_2d3d
+        ]
+        if not eligible_candidates:
+            break
+
+        best_candidate, best_score = eligible_candidates[0]
         result = register_image_pnp(
             candidate=best_candidate,
             camera=cameras[best_candidate.image_name],
@@ -102,6 +124,19 @@ def main() -> int:
             "pnp_inliers": int(result.pnp_inliers.shape[0]),
             "inlier_ratio": float(result.pnp_inliers.shape[0] / max(result.num_2d3d, 1)),
             "mean_reprojection_error": result.mean_reprojection_error,
+            "selection_method": "phase5c_pyramid_visibility",
+            "iteration": iteration + 1,
+            "pyramid_visibility_score": best_score.pyramid_score,
+            "registered_neighbor_count": best_score.registered_neighbor_count,
+            "num_general_edges": best_score.num_general_edges,
+            "num_planar_edges": best_score.num_planar_edges,
+            "mean_homography_ratio": best_score.mean_homography_ratio,
+            "eligible_candidates": len(eligible_candidates),
+            "total_candidates": len(scored_candidates),
+            "top_candidates": [
+                summarize_nbv_candidate(candidate, score, min_2d3d=args.min_2d3d)
+                for candidate, score in scored_candidates[: max(args.top_candidates, 1)]
+            ],
         }
         registrations.append(registration_record)
         if result.success:
@@ -123,6 +158,8 @@ def main() -> int:
         "final_points3D": int(state.points3d.shape[0]),
         "initial_observations": initial_observations,
         "final_observations": len(state.observations),
+        "selection_method": "phase5c_pyramid_visibility",
+        "visibility_levels": args.visibility_levels,
         "state_path": str(state_path),
         "registered_npz_path": str(registered_npz_path),
         "per_image": registrations,
@@ -138,6 +175,19 @@ def main() -> int:
     print(f"Registered NPZ: {registered_npz_path}")
     print(f"Report: {report_path}")
     return 0
+
+
+def summarize_nbv_candidate(candidate, score: NextBestViewScore, min_2d3d: int) -> dict:
+    return {
+        "image_name": candidate.image_name,
+        "num_2d3d": candidate.num_correspondences,
+        "eligible": candidate.num_correspondences >= min_2d3d,
+        "pyramid_visibility_score": score.pyramid_score,
+        "registered_neighbor_count": score.registered_neighbor_count,
+        "num_general_edges": score.num_general_edges,
+        "num_planar_edges": score.num_planar_edges,
+        "mean_homography_ratio": score.mean_homography_ratio,
+    }
 
 
 def plot_camera_centers(state, output_path: Path) -> None:
