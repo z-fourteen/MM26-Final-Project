@@ -7,12 +7,17 @@ from datetime import datetime
 from pathlib import Path
 
 from src.sfm.config import load_scene_config, resolve_project_path
+from src.sfm.reconstruction import load_reconstruction_state, save_reconstruction_state
 
 
 STATE_FILES = (
     "reconstruction_state.json",
     "reconstruction_points.npz",
     "registered_images.npz",
+)
+INITIAL_FILES = (
+    "initial_pair.npz",
+    "initial_points.npz",
 )
 
 
@@ -65,8 +70,21 @@ def save_checkpoint(sparse_dir: Path, checkpoint_dir: Path, overwrite: bool) -> 
             raise ValueError(f"Checkpoint path is not a directory: {checkpoint_dir}")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    materialized = False
+    if not any((sparse_dir / file_name).exists() for file_name in STATE_FILES):
+        if all((sparse_dir / file_name).exists() for file_name in INITIAL_FILES):
+            state = load_reconstruction_state(sparse_dir)
+            save_reconstruction_state(state, sparse_dir)
+            materialized = True
+
     copied = []
     for file_name in STATE_FILES:
+        source = sparse_dir / file_name
+        if not source.exists():
+            continue
+        shutil.copy2(source, checkpoint_dir / file_name)
+        copied.append(file_name)
+    for file_name in INITIAL_FILES:
         source = sparse_dir / file_name
         if not source.exists():
             continue
@@ -77,6 +95,7 @@ def save_checkpoint(sparse_dir: Path, checkpoint_dir: Path, overwrite: bool) -> 
     metadata = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "source_sparse_dir": str(sparse_dir),
+        "materialized_from_initial_state": materialized,
         "files": copied,
     }
     (checkpoint_dir / "checkpoint_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -89,7 +108,7 @@ def restore_checkpoint(sparse_dir: Path, checkpoint_dir: Path) -> int:
     if not checkpoint_dir.exists():
         raise FileNotFoundError(f"Checkpoint does not exist: {checkpoint_dir}")
     restored = []
-    for file_name in STATE_FILES:
+    for file_name in (*STATE_FILES, *INITIAL_FILES):
         source = checkpoint_dir / file_name
         if not source.exists():
             continue
