@@ -216,15 +216,17 @@ high-frequency stabilizer; global refinement is reserved for larger model growth
 
 ## 7. Matching and Export Notes
 
-The RootSIFT NPZ pipeline supports exhaustive and sequential pair generation through
-`src.tools.match_features`. The `vocabulary_tree` strategy is exposed through
-pycolmap and therefore expects a COLMAP database plus a vocabulary tree file:
+The RootSIFT NPZ pipeline supports exhaustive, sequential, and retrieval pair
+generation through `src.tools.match_features`. The retrieval mode is compatible with
+the current project pipeline: it builds a lightweight visual-word TF-IDF index from
+the existing `features/*.npz`, selects top-k image pairs, and still writes the same
+`matches/*.npz` files consumed by verification:
 
 ```bash
 python -m src.tools.match_features --scene configs/scenes/<scene>.yaml \
-  --strategy vocabulary_tree \
-  --database-path path/to/database.db \
-  --vocab-tree-path path/to/vocab_tree.bin
+  --strategy retrieval \
+  --retrieval-top-k 20 \
+  --retrieval-num-words 256
 ```
 
 For 3DGS handoff, export the current reconstruction as a COLMAP text sparse model:
