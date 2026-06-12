@@ -200,12 +200,17 @@ Start from a clean initialization state, then run:
 ```bash
 D:\06_envs\mm26\python.exe -m src.tools.run_paper_aligned_sfm \
   --scene configs/scenes/south_building_small.yaml \
-  --max-register 20 \
+  --max-register 50 \
   --local-ba-after-registration \
-  --global-ba-growth-ratio 1.1 \
+  --global-ba-growth-ratio 1.3 \
+  --global-ba-min-interval 4 \
   --filter-after-ba \
   --diagnose-degenerate-cameras \
   --report-name paper_aligned_sfm_report.json
 ```
 
 Use `--remove-degenerate-cameras` only after inspecting diagnostic reports.
+
+The `--global-ba-min-interval` option prevents small early reconstructions from
+running global refinement after every newly registered image. Local BA remains the
+high-frequency stabilizer; global refinement is reserved for larger model growth.

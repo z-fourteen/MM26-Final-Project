@@ -46,6 +46,7 @@ def main() -> int:
     parser.add_argument("--local-ba-max-points", type=int, default=800)
     parser.add_argument("--local-ba-max-observations", type=int, default=4000)
     parser.add_argument("--global-ba-growth-ratio", type=float, default=1.1)
+    parser.add_argument("--global-ba-min-interval", type=int, default=0)
     parser.add_argument("--global-ba-max-iterations", type=int, default=40)
     parser.add_argument("--global-ba-max-points", type=int, default=2500)
     parser.add_argument("--global-ba-max-observations", type=int, default=12000)
@@ -82,6 +83,7 @@ def main() -> int:
     failed_images: set[str] = set()
     last_global_ba_images = len(state.registered_images)
     last_global_ba_points = int(state.points3d.shape[0])
+    last_global_ba_iteration = 0
     iterations = []
 
     for iteration in range(1, args.max_register + 1):
@@ -148,6 +150,9 @@ def main() -> int:
         if should_run_global_ba(
             state=state,
             growth_ratio=args.global_ba_growth_ratio,
+            min_interval=args.global_ba_min_interval,
+            current_iteration=iteration,
+            last_global_ba_iteration=last_global_ba_iteration,
             last_global_ba_images=last_global_ba_images,
             last_global_ba_points=last_global_ba_points,
         ):
@@ -157,6 +162,7 @@ def main() -> int:
             state = load_reconstruction_state(sparse_dir)
             last_global_ba_images = len(state.registered_images)
             last_global_ba_points = int(state.points3d.shape[0])
+            last_global_ba_iteration = iteration
 
         iterations.append(record)
 
@@ -178,6 +184,7 @@ def main() -> int:
         "max_register": args.max_register,
         "local_ba_after_registration": bool(args.local_ba_after_registration),
         "global_ba_growth_ratio": float(args.global_ba_growth_ratio),
+        "global_ba_min_interval": int(args.global_ba_min_interval),
         "filter_after_ba": bool(args.filter_after_ba),
         "diagnose_degenerate_cameras": bool(args.diagnose_degenerate_cameras),
         "remove_degenerate_cameras": bool(args.remove_degenerate_cameras),
@@ -422,8 +429,18 @@ def run_ba_filtering_cycle(
     return reports
 
 
-def should_run_global_ba(state, growth_ratio: float, last_global_ba_images: int, last_global_ba_points: int) -> bool:
+def should_run_global_ba(
+    state,
+    growth_ratio: float,
+    min_interval: int,
+    current_iteration: int,
+    last_global_ba_iteration: int,
+    last_global_ba_images: int,
+    last_global_ba_points: int,
+) -> bool:
     if growth_ratio <= 0:
+        return False
+    if min_interval > 0 and current_iteration - last_global_ba_iteration < min_interval:
         return False
     current_images = len(state.registered_images)
     current_points = int(state.points3d.shape[0])
