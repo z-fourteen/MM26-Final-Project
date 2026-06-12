@@ -46,7 +46,9 @@ class Candidate2D3D:
 @dataclass(frozen=True)
 class NextBestViewScore:
     image_name: str
+    combined_score: float
     pyramid_score: float
+    image_grid_coverage: int
     num_2d3d: int
     registered_neighbor_count: int
     num_general_edges: int
@@ -66,6 +68,7 @@ class RegistrationResult:
     status: str
     keypoint_indices: np.ndarray
     point3d_ids: np.ndarray
+    pnp_diagnostics: dict[str, object]
 
 
 def load_initial_state(sparse_dir: Path) -> ReconstructionState:
@@ -277,14 +280,26 @@ def score_next_best_view(
         verified_dir=verified_dir,
         registered_image_names=registered_image_names,
     )
+    pyramid_score = image_pyramid_visibility_score(
+        candidate.points2d,
+        image_width=camera.width,
+        image_height=camera.height,
+        levels=levels,
+    )
+    image_grid = grid_coverage(candidate.points2d, camera.width, camera.height, grid_size=4)
+    combined_score = (
+        pyramid_score
+        + 80.0 * float(image_grid)
+        + 20.0 * float(min(diagnostics["registered_neighbor_count"], 30))
+        + 10.0 * float(min(diagnostics["num_general_edges"], 30))
+        + 5.0 * float(np.log1p(candidate.num_correspondences))
+        - 20.0 * float(diagnostics["mean_homography_ratio"])
+    )
     return NextBestViewScore(
         image_name=candidate.image_name,
-        pyramid_score=image_pyramid_visibility_score(
-            candidate.points2d,
-            image_width=camera.width,
-            image_height=camera.height,
-            levels=levels,
-        ),
+        combined_score=float(combined_score),
+        pyramid_score=float(pyramid_score),
+        image_grid_coverage=int(image_grid),
         num_2d3d=candidate.num_correspondences,
         registered_neighbor_count=diagnostics["registered_neighbor_count"],
         num_general_edges=diagnostics["num_general_edges"],
@@ -334,6 +349,8 @@ def register_image_pnp(
     reproj_error_px: float,
     confidence: float = 0.999,
     min_inlier_ratio: float = 0.0,
+    strict_mean_error_px: float = 0.0,
+    strict_median_error_px: float = 0.0,
     max_mean_error_px: float = 0.0,
     max_median_error_px: float = 0.0,
     min_cheirality_ratio: float = 0.0,
@@ -341,12 +358,32 @@ def register_image_pnp(
     min_grid_coverage: int = 0,
     grid_size: int = 4,
 ) -> RegistrationResult:
+    diagnostics = _base_pnp_diagnostics(candidate)
+    diagnostics.update(
+        {
+            "min_2d3d": int(min_2d3d),
+            "min_pnp_inliers": int(min_pnp_inliers),
+            "ransac_reprojection_error_px": float(reproj_error_px),
+            "strict_mean_error_px": float(strict_mean_error_px),
+            "strict_median_error_px": float(strict_median_error_px),
+            "max_mean_error_px": float(max_mean_error_px),
+            "max_median_error_px": float(max_median_error_px),
+            "min_inlier_ratio": float(min_inlier_ratio),
+            "min_cheirality_ratio": float(min_cheirality_ratio),
+            "min_depth_iqr": float(min_depth_iqr),
+            "min_grid_coverage": int(min_grid_coverage),
+            "soft_accept": False,
+        }
+    )
     if candidate.num_correspondences < min_2d3d:
-        return _failed_registration(candidate, "not_enough_2d3d")
+        diagnostics["failed_gate"] = "not_enough_2d3d"
+        return _failed_registration(candidate, "not_enough_2d3d", diagnostics)
     if min_grid_coverage > 0:
         coverage = grid_coverage(candidate.points2d, camera.width, camera.height, grid_size=grid_size)
+        diagnostics["grid_coverage"] = int(coverage)
         if coverage < min_grid_coverage:
-            return _failed_registration(candidate, "poor_spatial_coverage")
+            diagnostics["failed_gate"] = "poor_spatial_coverage"
+            return _failed_registration(candidate, "poor_spatial_coverage", diagnostics)
 
     success, rvec, tvec, inliers = cv2.solvePnPRansac(
         objectPoints=candidate.points3d.astype(np.float64),
@@ -359,9 +396,26 @@ def register_image_pnp(
         flags=cv2.SOLVEPNP_EPNP,
     )
     if not success or inliers is None or len(inliers) < min_pnp_inliers:
-        return _failed_registration(candidate, "pnp_failed")
-    if min_inlier_ratio > 0 and float(len(inliers)) / float(max(candidate.num_correspondences, 1)) < min_inlier_ratio:
-        return _failed_registration(candidate, "low_pnp_inlier_ratio")
+        diagnostics.update(
+            {
+                "ransac_success": bool(success),
+                "pnp_inliers": int(0 if inliers is None else len(inliers)),
+                "inlier_ratio": float(0.0 if inliers is None else len(inliers) / max(candidate.num_correspondences, 1)),
+                "failed_gate": "pnp_failed",
+            }
+        )
+        return _failed_registration(candidate, "pnp_failed", diagnostics)
+    inlier_ratio = float(len(inliers)) / float(max(candidate.num_correspondences, 1))
+    if min_inlier_ratio > 0 and inlier_ratio < min_inlier_ratio:
+        diagnostics.update(
+            {
+                "ransac_success": True,
+                "pnp_inliers": int(len(inliers)),
+                "inlier_ratio": inlier_ratio,
+                "failed_gate": "low_pnp_inlier_ratio",
+            }
+        )
+        return _failed_registration(candidate, "low_pnp_inlier_ratio", diagnostics)
 
     inlier_indices = inliers.ravel().astype(np.int32)
     inlier_points3d = candidate.points3d[inlier_indices]
@@ -382,17 +436,48 @@ def register_image_pnp(
     errors = np.linalg.norm(projected - inlier_points2d, axis=1)
     mean_error = float(np.mean(errors))
     median_error = float(np.median(errors))
+    p90_error = float(np.percentile(errors, 90))
+    p95_error = float(np.percentile(errors, 95))
+    max_error = float(np.max(errors))
     depths = camera_depths_for_pose(R, t, inlier_points3d)
     cheirality_ratio = float(np.mean(depths > 1e-8)) if depths.size else 0.0
     depth_iqr = float(np.percentile(depths, 75) - np.percentile(depths, 25)) if depths.size else 0.0
+    diagnostics.update(
+        {
+            "ransac_success": True,
+            "pnp_inliers": int(len(inlier_indices)),
+            "inlier_ratio": inlier_ratio,
+            "mean_reprojection_error": mean_error,
+            "median_reprojection_error": median_error,
+            "p90_reprojection_error": p90_error,
+            "p95_reprojection_error": p95_error,
+            "max_reprojection_error": max_error,
+            "cheirality_ratio": cheirality_ratio,
+            "depth_iqr": depth_iqr,
+            "depth_min": float(np.min(depths)) if depths.size else 0.0,
+            "depth_max": float(np.max(depths)) if depths.size else 0.0,
+        }
+    )
     if max_mean_error_px > 0 and mean_error > max_mean_error_px:
-        return _failed_registration(candidate, "high_pnp_mean_error")
+        diagnostics["failed_gate"] = "high_pnp_mean_error"
+        return _failed_registration(candidate, "high_pnp_mean_error", diagnostics)
     if max_median_error_px > 0 and median_error > max_median_error_px:
-        return _failed_registration(candidate, "high_pnp_median_error")
+        diagnostics["failed_gate"] = "high_pnp_median_error"
+        return _failed_registration(candidate, "high_pnp_median_error", diagnostics)
     if min_cheirality_ratio > 0 and cheirality_ratio < min_cheirality_ratio:
-        return _failed_registration(candidate, "low_cheirality")
+        diagnostics["failed_gate"] = "low_cheirality"
+        return _failed_registration(candidate, "low_cheirality", diagnostics)
     if min_depth_iqr > 0 and depth_iqr < min_depth_iqr:
-        return _failed_registration(candidate, "low_depth_dispersion")
+        diagnostics["failed_gate"] = "low_depth_dispersion"
+        return _failed_registration(candidate, "low_depth_dispersion", diagnostics)
+    soft_reasons = []
+    if strict_mean_error_px > 0 and mean_error > strict_mean_error_px:
+        soft_reasons.append("mean_reprojection_error")
+    if strict_median_error_px > 0 and median_error > strict_median_error_px:
+        soft_reasons.append("median_reprojection_error")
+    soft_accept = bool(soft_reasons)
+    diagnostics["soft_accept"] = soft_accept
+    diagnostics["soft_reasons"] = soft_reasons
     return RegistrationResult(
         image_name=candidate.image_name,
         success=True,
@@ -401,13 +486,26 @@ def register_image_pnp(
         pnp_inliers=inlier_indices,
         mean_reprojection_error=mean_error,
         num_2d3d=candidate.num_correspondences,
-        status="registered",
+        status="registered_soft_pnp" if soft_accept else "registered",
         keypoint_indices=candidate.keypoint_indices[inlier_indices],
         point3d_ids=candidate.point3d_ids[inlier_indices],
+        pnp_diagnostics=diagnostics,
     )
 
 
-def _failed_registration(candidate: Candidate2D3D, status: str) -> RegistrationResult:
+def _base_pnp_diagnostics(candidate: Candidate2D3D) -> dict[str, object]:
+    return {
+        "num_2d3d": int(candidate.num_correspondences),
+        "num_general_2d3d": int(np.sum(candidate.match_sources == "general")),
+        "num_planar_2d3d": int(np.sum(candidate.match_sources == "planar")),
+    }
+
+
+def _failed_registration(
+    candidate: Candidate2D3D,
+    status: str,
+    pnp_diagnostics: dict[str, object] | None = None,
+) -> RegistrationResult:
     return RegistrationResult(
         image_name=candidate.image_name,
         success=False,
@@ -419,6 +517,7 @@ def _failed_registration(candidate: Candidate2D3D, status: str) -> RegistrationR
         status=status,
         keypoint_indices=np.empty((0,), dtype=np.int32),
         point3d_ids=np.empty((0,), dtype=np.int32),
+        pnp_diagnostics=pnp_diagnostics or _base_pnp_diagnostics(candidate),
     )
 
 

@@ -42,11 +42,17 @@ def main() -> int:
     parser.add_argument("--disable-planar-pnp", action="store_false", dest="allow_planar_pnp")
     parser.add_argument("--max-planar-correspondence-fraction", type=float, default=0.75)
     parser.add_argument("--min-pnp-inlier-ratio", type=float, default=0.25)
-    parser.add_argument("--max-pnp-mean-error", type=float, default=6.0)
-    parser.add_argument("--max-pnp-median-error", type=float, default=4.0)
+    parser.add_argument("--strict-pnp-mean-error", type=float, default=6.0)
+    parser.add_argument("--strict-pnp-median-error", type=float, default=4.0)
+    parser.add_argument("--max-pnp-mean-error", type=float, default=8.0)
+    parser.add_argument("--max-pnp-median-error", type=float, default=6.0)
     parser.add_argument("--min-pnp-cheirality-ratio", type=float, default=0.9)
     parser.add_argument("--min-pnp-depth-iqr", type=float, default=1e-4)
     parser.add_argument("--min-pnp-grid-coverage", type=int, default=4)
+    parser.add_argument("--retry-failed-images", action="store_true", default=True)
+    parser.add_argument("--disable-failed-image-retry", action="store_false", dest="retry_failed_images")
+    parser.add_argument("--failed-retry-interval", type=int, default=3)
+    parser.add_argument("--max-failed-retries", type=int, default=5)
     parser.add_argument("--focal-scale", type=float, default=1.2)
     parser.add_argument("--visibility-levels", type=int, default=3)
     parser.add_argument("--top-candidates", type=int, default=5)
@@ -113,7 +119,7 @@ def main() -> int:
     initial_registered_images = len(state.registered_images)
     initial_points3d = int(state.points3d.shape[0])
     initial_observations = len(state.observations)
-    failed_images: set[str] = set()
+    failed_images: dict[str, dict[str, object]] = {}
     last_global_ba_images = len(state.registered_images)
     last_global_ba_points = int(state.points3d.shape[0])
     last_global_ba_iteration = 0
@@ -131,6 +137,10 @@ def main() -> int:
             min_2d3d=args.min_2d3d,
             visibility_levels=args.visibility_levels,
             failed_images=failed_images,
+            current_iteration=iteration,
+            retry_failed_images=args.retry_failed_images,
+            failed_retry_interval=args.failed_retry_interval,
+            max_failed_retries=args.max_failed_retries,
             allow_planar_pnp=args.allow_planar_pnp,
             max_planar_correspondence_fraction=args.max_planar_correspondence_fraction,
         )
@@ -147,6 +157,8 @@ def main() -> int:
             reproj_error_px=max_reproj_error,
             confidence=pnp_confidence,
             min_inlier_ratio=args.min_pnp_inlier_ratio,
+            strict_mean_error_px=args.strict_pnp_mean_error,
+            strict_median_error_px=args.strict_pnp_median_error,
             max_mean_error_px=args.max_pnp_mean_error,
             max_median_error_px=args.max_pnp_median_error,
             min_cheirality_ratio=args.min_pnp_cheirality_ratio,
@@ -159,16 +171,23 @@ def main() -> int:
             "status": registration.status,
             "num_2d3d": registration.num_2d3d,
             "pnp_inliers": int(registration.pnp_inliers.shape[0]),
+            "inlier_ratio": float(registration.pnp_inliers.shape[0] / max(registration.num_2d3d, 1)),
             "mean_reprojection_error": registration.mean_reprojection_error,
+            "pnp_diagnostics": registration.pnp_diagnostics,
+            "soft_accept": bool(registration.pnp_diagnostics.get("soft_accept", False)),
+            "retry_attempt": int(failed_images.get(registration.image_name, {}).get("attempts", 0)),
+            "combined_score": score.combined_score,
             "pyramid_visibility_score": score.pyramid_score,
+            "image_grid_coverage": score.image_grid_coverage,
             "registered_neighbor_count": score.registered_neighbor_count,
             "top_unregistered_candidates": strip_candidate_payloads(candidate_diagnostics, args.top_candidates),
             "reports": [],
         }
         if not registration.success:
-            failed_images.add(registration.image_name)
+            update_failed_image_record(failed_images, registration, iteration)
             iterations.append(record)
             continue
+        failed_images.pop(registration.image_name, None)
 
         add_registered_image(state, registration)
         save_reconstruction_state(state, sparse_dir)
@@ -234,6 +253,13 @@ def main() -> int:
         "local_ba_after_registration": bool(args.local_ba_after_registration),
         "global_ba_growth_ratio": float(args.global_ba_growth_ratio),
         "global_ba_min_interval": int(args.global_ba_min_interval),
+        "strict_pnp_mean_error": float(args.strict_pnp_mean_error),
+        "strict_pnp_median_error": float(args.strict_pnp_median_error),
+        "max_pnp_mean_error": float(args.max_pnp_mean_error),
+        "max_pnp_median_error": float(args.max_pnp_median_error),
+        "retry_failed_images": bool(args.retry_failed_images),
+        "failed_retry_interval": int(args.failed_retry_interval),
+        "max_failed_retries": int(args.max_failed_retries),
         "filter_after_ba": bool(args.filter_after_ba),
         "diagnose_degenerate_cameras": bool(args.diagnose_degenerate_cameras),
         "remove_degenerate_cameras": bool(args.remove_degenerate_cameras),
@@ -251,6 +277,10 @@ def main() -> int:
                 min_2d3d=args.min_2d3d,
                 visibility_levels=args.visibility_levels,
                 failed_images=failed_images,
+                current_iteration=args.max_register + 1,
+                retry_failed_images=args.retry_failed_images,
+                failed_retry_interval=args.failed_retry_interval,
+                max_failed_retries=args.max_failed_retries,
                 allow_planar_pnp=args.allow_planar_pnp,
                 max_planar_correspondence_fraction=args.max_planar_correspondence_fraction,
                 limit=max(args.top_candidates, 10),
@@ -259,6 +289,7 @@ def main() -> int:
         ),
         "final_refinement_reports": final_reports,
         "final_residual_report": final_residual_report,
+        "failed_image_records": failed_images,
     }
     report_path = report_root / scoped_report_name(args, Path(args.report_name).name)
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,7 +312,11 @@ def collect_unregistered_candidate_diagnostics(
     cameras: dict[str, object],
     min_2d3d: int,
     visibility_levels: int,
-    failed_images: set[str],
+    failed_images: dict[str, dict[str, object]],
+    current_iteration: int,
+    retry_failed_images: bool,
+    failed_retry_interval: int,
+    max_failed_retries: int,
     allow_planar_pnp: bool,
     max_planar_correspondence_fraction: float,
     limit: int | None = None,
@@ -292,7 +327,15 @@ def collect_unregistered_candidate_diagnostics(
         if image_name in state.registered_images:
             continue
         status = "eligible"
-        if image_name in failed_images:
+        failure_record = failed_images.get(image_name)
+        retry_eligible = failure_record is None or is_failed_image_retry_eligible(
+            failure_record=failure_record,
+            current_iteration=current_iteration,
+            retry_failed_images=retry_failed_images,
+            failed_retry_interval=failed_retry_interval,
+            max_failed_retries=max_failed_retries,
+        )
+        if failure_record is not None and not retry_eligible:
             status = "pnp_failed"
         candidate = collect_candidate_correspondences(
             image_name=image_name,
@@ -323,17 +366,23 @@ def collect_unregistered_candidate_diagnostics(
                 "num_2d3d": candidate.num_correspondences,
                 "num_general_2d3d": num_general_2d3d,
                 "num_planar_2d3d": num_planar_2d3d,
+                "combined_score": score.combined_score,
                 "pyramid_visibility_score": score.pyramid_score,
+                "image_grid_coverage": score.image_grid_coverage,
                 "registered_neighbor_count": score.registered_neighbor_count,
                 "num_general_edges": score.num_general_edges,
                 "num_planar_edges": score.num_planar_edges,
                 "mean_homography_ratio": score.mean_homography_ratio,
-                "pnp_failed": image_name in failed_images,
+                "pnp_failed": failure_record is not None,
+                "retry_eligible": retry_eligible,
+                "failed_attempts": int(failure_record.get("attempts", 0)) if failure_record is not None else 0,
+                "last_failure_status": str(failure_record.get("last_status", "")) if failure_record is not None else "",
+                "last_failed_iteration": int(failure_record.get("last_iteration", 0)) if failure_record is not None else 0,
                 "_candidate": candidate,
                 "_score": score,
             }
         )
-    diagnostics.sort(key=lambda item: (item["eligible"], item["pyramid_visibility_score"], item["num_2d3d"]), reverse=True)
+    diagnostics.sort(key=lambda item: (item["eligible"], item["combined_score"], item["num_2d3d"]), reverse=True)
     if limit is not None:
         diagnostics = diagnostics[:limit]
     return diagnostics
@@ -345,6 +394,39 @@ def select_next_image(candidate_diagnostics: list[dict]) -> tuple[Candidate2D3D,
             continue
         return item["_candidate"], item["_score"]
     return None
+
+
+def is_failed_image_retry_eligible(
+    failure_record: dict[str, object],
+    current_iteration: int,
+    retry_failed_images: bool,
+    failed_retry_interval: int,
+    max_failed_retries: int,
+) -> bool:
+    if not retry_failed_images:
+        return False
+    attempts = int(failure_record.get("attempts", 0))
+    if max_failed_retries > 0 and attempts >= max_failed_retries:
+        return False
+    last_iteration = int(failure_record.get("last_iteration", 0))
+    return current_iteration - last_iteration >= max(1, int(failed_retry_interval))
+
+
+def update_failed_image_record(
+    failed_images: dict[str, dict[str, object]],
+    registration,
+    iteration: int,
+) -> None:
+    previous = failed_images.get(registration.image_name, {})
+    failed_images[registration.image_name] = {
+        "attempts": int(previous.get("attempts", 0)) + 1,
+        "last_iteration": int(iteration),
+        "last_status": registration.status,
+        "last_num_2d3d": int(registration.num_2d3d),
+        "last_pnp_inliers": int(registration.pnp_inliers.shape[0]),
+        "last_mean_reprojection_error": float(registration.mean_reprojection_error),
+        "last_pnp_diagnostics": registration.pnp_diagnostics,
+    }
 
 
 def strip_candidate_payloads(candidate_diagnostics: list[dict], limit: int) -> list[dict]:
