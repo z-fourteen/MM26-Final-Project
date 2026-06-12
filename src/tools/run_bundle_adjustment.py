@@ -14,7 +14,7 @@ from src.sfm.bundle_adjustment import (
     run_bundle_adjustment,
     select_local_ba_images,
 )
-from src.sfm.camera import estimate_simple_pinhole
+from src.sfm.camera import load_camera_from_feature, load_camera_overrides, write_camera_overrides
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
 from src.sfm.matching import load_features
@@ -31,6 +31,8 @@ def main() -> int:
     parser.add_argument("--max-observations", type=int, default=8000)
     parser.add_argument("--min-track-length", type=int, default=2)
     parser.add_argument("--focal-scale", type=float, default=1.2)
+    parser.add_argument("--optimize-shared-focal", action="store_true")
+    parser.add_argument("--focal-bound-scale", type=float, default=2.0)
     parser.add_argument("--scope", default="global", choices=["global", "local"])
     parser.add_argument("--target-image", default="", help="Target registered image for local BA.")
     parser.add_argument("--local-neighbors", type=int, default=6)
@@ -57,10 +59,15 @@ def main() -> int:
     }
     keypoints_by_name = {image_name: features.keypoints for image_name, features in features_by_name.items()}
     cameras = {}
+    camera_overrides = load_camera_overrides(sparse_dir)
     for image_path in images:
-        feature_data = np.load(feature_dir / f"{image_path.stem}.npz")
-        width, height = [int(value) for value in feature_data["image_size"]]
-        cameras[image_path.name] = estimate_simple_pinhole(width, height, focal_scale=args.focal_scale)
+        cameras[image_path.name] = load_camera_from_feature(
+            feature_path=feature_dir / f"{image_path.stem}.npz",
+            image_path=image_path,
+            focal_scale=args.focal_scale,
+            prefer_exif=bool(config["default"].get("camera", {}).get("estimate_focal_from_exif", True)),
+            override=camera_overrides.get(image_path.name),
+        )
 
     local_image_names = []
     target_image_name = args.target_image
@@ -94,15 +101,19 @@ def main() -> int:
         scope=args.scope,
         local_image_names=local_image_names,
         point_priority_errors=point_priority_errors,
+        optimize_shared_focal=args.optimize_shared_focal,
+        focal_bound_scale=args.focal_bound_scale,
     )
 
     backup_paths = {}
     if not args.dry_run:
         backup_paths = backup_reconstruction_state(sparse_dir)
         state_path, registered_npz_path = save_reconstruction_state(result.optimized_state, sparse_dir)
+        intrinsics_path = write_camera_overrides(sparse_dir, result.optimized_cameras, source="bundle_adjustment")
     else:
         state_path = sparse_dir / "reconstruction_state.json"
         registered_npz_path = sparse_dir / "registered_images.npz"
+        intrinsics_path = sparse_dir / "camera_intrinsics.json"
 
     initial_errors = result.initial_errors
     final_errors = result.final_errors
@@ -130,6 +141,10 @@ def main() -> int:
         "max_points": args.max_points,
         "max_observations": args.max_observations,
         "min_track_length": args.min_track_length,
+        "optimize_shared_focal": args.optimize_shared_focal,
+        "focal_bound_scale": args.focal_bound_scale,
+        "initial_shared_focal": result.initial_shared_focal,
+        "final_shared_focal": result.final_shared_focal,
         "priority_residual_report": args.priority_residual_report,
         "num_priority_points": len(point_priority_errors),
         "optimizer_success": result.success,
@@ -172,6 +187,7 @@ def main() -> int:
         ],
         "state_path": str(state_path),
         "registered_npz_path": str(registered_npz_path),
+        "camera_intrinsics_path": str(intrinsics_path),
         "backup_paths": backup_paths,
     }
     report_path = report_dir / args.report_name

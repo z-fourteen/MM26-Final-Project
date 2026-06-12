@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
-from src.sfm.camera import estimate_simple_pinhole, projection_matrix
+from src.sfm.camera import load_camera_from_feature, load_camera_overrides, projection_matrix
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
 from src.sfm.matching import load_features
@@ -426,10 +426,16 @@ def main() -> int:
         for image_name in registered_names
     }
     cameras = {}
+    camera_overrides = load_camera_overrides(sparse_dir)
     for image_name in registered_names:
-        feature_data = np.load(feature_dir / f"{Path(image_name).stem}.npz")
-        width, height = [int(value) for value in feature_data["image_size"]]
-        cameras[image_name] = estimate_simple_pinhole(width, height, focal_scale=args.focal_scale)
+        image_path = image_by_name[image_name]
+        cameras[image_name] = load_camera_from_feature(
+            feature_path=feature_dir / f"{Path(image_name).stem}.npz",
+            image_path=image_path,
+            focal_scale=args.focal_scale,
+            prefer_exif=bool(default.get("camera", {}).get("estimate_focal_from_exif", True)),
+            override=camera_overrides.get(image_name),
+        )
 
     images_rgb: dict[str, np.ndarray] = {}
     projections = {

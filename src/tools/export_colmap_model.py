@@ -7,6 +7,7 @@ import numpy as np
 
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
+from src.sfm.camera import load_camera_from_feature, load_camera_overrides
 from src.sfm.matching import load_features
 from src.sfm.reconstruction import load_reconstruction_state
 
@@ -19,6 +20,7 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
+    default = config["default"]
     scene = config["scene"]
     image_dir = resolve_project_path(scene["image_dir"])
     feature_dir = resolve_project_path(scene["feature_dir"])
@@ -29,14 +31,27 @@ def main() -> int:
     state = load_reconstruction_state(sparse_dir)
     image_paths = list_images(image_dir)
     image_id_by_name = {image_path.name: index + 1 for index, image_path in enumerate(image_paths)}
+    image_path_by_name = {image_path.name: image_path for image_path in image_paths}
     registered_names = [name for name in image_id_by_name if name in state.registered_images]
 
     camera_records = {}
+    camera_overrides = load_camera_overrides(sparse_dir)
     for image_name in registered_names:
-        feature_data = np.load(feature_dir / f"{Path(image_name).stem}.npz")
-        width, height = [int(value) for value in feature_data["image_size"]]
-        focal = float(args.focal_scale * max(width, height))
-        camera_records[image_id_by_name[image_name]] = (width, height, focal, width / 2.0, height / 2.0)
+        camera = load_camera_from_feature(
+            feature_path=feature_dir / f"{Path(image_name).stem}.npz",
+            image_path=image_path_by_name.get(image_name),
+            focal_scale=args.focal_scale,
+            prefer_exif=bool(default.get("camera", {}).get("estimate_focal_from_exif", True)),
+            override=camera_overrides.get(image_name),
+        )
+        camera_records[image_id_by_name[image_name]] = (
+            camera.width,
+            camera.height,
+            camera.fx,
+            camera.fy,
+            camera.cx,
+            camera.cy,
+        )
 
     keypoints_by_name = {
         image_name: load_features(feature_dir / f"{Path(image_name).stem}.npz").keypoints
@@ -73,14 +88,17 @@ def main() -> int:
     return 0
 
 
-def write_cameras(path: Path, camera_records: dict[int, tuple[int, int, float, float, float]]) -> None:
+def write_cameras(path: Path, camera_records: dict[int, tuple[int, int, float, float, float, float]]) -> None:
     lines = [
         "# Camera list with one line of data per camera:",
         "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]",
         f"# Number of cameras: {len(camera_records)}",
     ]
-    for camera_id, (width, height, focal, cx, cy) in sorted(camera_records.items()):
-        lines.append(f"{camera_id} SIMPLE_PINHOLE {width} {height} {focal:.12g} {cx:.12g} {cy:.12g}")
+    for camera_id, (width, height, fx, fy, cx, cy) in sorted(camera_records.items()):
+        if abs(float(fx) - float(fy)) < 1e-6:
+            lines.append(f"{camera_id} SIMPLE_PINHOLE {width} {height} {fx:.12g} {cx:.12g} {cy:.12g}")
+        else:
+            lines.append(f"{camera_id} PINHOLE {width} {height} {fx:.12g} {fy:.12g} {cx:.12g} {cy:.12g}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

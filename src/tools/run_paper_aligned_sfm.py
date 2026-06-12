@@ -36,6 +36,15 @@ def main() -> int:
     parser.add_argument("--max-register", type=int, default=20)
     parser.add_argument("--min-2d3d", type=int, default=30)
     parser.add_argument("--min-pnp-inliers", type=int, default=20)
+    parser.add_argument("--allow-planar-pnp", action="store_true", default=True)
+    parser.add_argument("--disable-planar-pnp", action="store_false", dest="allow_planar_pnp")
+    parser.add_argument("--max-planar-correspondence-fraction", type=float, default=0.75)
+    parser.add_argument("--min-pnp-inlier-ratio", type=float, default=0.25)
+    parser.add_argument("--max-pnp-mean-error", type=float, default=6.0)
+    parser.add_argument("--max-pnp-median-error", type=float, default=4.0)
+    parser.add_argument("--min-pnp-cheirality-ratio", type=float, default=0.9)
+    parser.add_argument("--min-pnp-depth-iqr", type=float, default=1e-4)
+    parser.add_argument("--min-pnp-grid-coverage", type=int, default=4)
     parser.add_argument("--focal-scale", type=float, default=1.2)
     parser.add_argument("--visibility-levels", type=int, default=3)
     parser.add_argument("--top-candidates", type=int, default=5)
@@ -49,6 +58,8 @@ def main() -> int:
     parser.add_argument("--global-ba-max-iterations", type=int, default=40)
     parser.add_argument("--global-ba-max-points", type=int, default=2500)
     parser.add_argument("--global-ba-max-observations", type=int, default=12000)
+    parser.add_argument("--optimize-shared-focal", action="store_true")
+    parser.add_argument("--focal-bound-scale", type=float, default=2.0)
     parser.add_argument("--ba-loss", default="cauchy", choices=["linear", "soft_l1", "huber", "cauchy", "arctan"])
     parser.add_argument("--ba-f-scale", type=float, default=4.0)
     parser.add_argument("--filter-after-ba", action="store_true")
@@ -98,6 +109,8 @@ def main() -> int:
             min_2d3d=args.min_2d3d,
             visibility_levels=args.visibility_levels,
             failed_images=failed_images,
+            allow_planar_pnp=args.allow_planar_pnp,
+            max_planar_correspondence_fraction=args.max_planar_correspondence_fraction,
         )
         selected = select_next_image(candidate_diagnostics)
         if selected is None:
@@ -111,6 +124,12 @@ def main() -> int:
             min_pnp_inliers=args.min_pnp_inliers,
             reproj_error_px=max_reproj_error,
             confidence=pnp_confidence,
+            min_inlier_ratio=args.min_pnp_inlier_ratio,
+            max_mean_error_px=args.max_pnp_mean_error,
+            max_median_error_px=args.max_pnp_median_error,
+            min_cheirality_ratio=args.min_pnp_cheirality_ratio,
+            min_depth_iqr=args.min_pnp_depth_iqr,
+            min_grid_coverage=args.min_pnp_grid_coverage,
         )
         record = {
             "iteration": iteration,
@@ -208,6 +227,8 @@ def main() -> int:
                 min_2d3d=args.min_2d3d,
                 visibility_levels=args.visibility_levels,
                 failed_images=failed_images,
+                allow_planar_pnp=args.allow_planar_pnp,
+                max_planar_correspondence_fraction=args.max_planar_correspondence_fraction,
                 limit=max(args.top_candidates, 10),
             ),
             max(args.top_candidates, 10),
@@ -236,6 +257,8 @@ def collect_unregistered_candidate_diagnostics(
     min_2d3d: int,
     visibility_levels: int,
     failed_images: set[str],
+    allow_planar_pnp: bool,
+    max_planar_correspondence_fraction: float,
     limit: int | None = None,
 ) -> list[dict]:
     diagnostics = []
@@ -251,7 +274,12 @@ def collect_unregistered_candidate_diagnostics(
             state=state,
             verified_dir=verified_dir,
             keypoints_by_name=keypoints_by_name,
+            allow_planar=allow_planar_pnp,
+            min_general_correspondences=min_2d3d,
+            max_planar_fraction=max_planar_correspondence_fraction,
         )
+        num_general_2d3d = int(np.sum(candidate.match_sources == "general"))
+        num_planar_2d3d = int(np.sum(candidate.match_sources == "planar"))
         eligible_2d3d = candidate.num_correspondences >= min_2d3d
         if not eligible_2d3d and status == "eligible":
             status = "not_enough_2d3d"
@@ -268,6 +296,8 @@ def collect_unregistered_candidate_diagnostics(
                 "status": status,
                 "eligible": status == "eligible" and eligible_2d3d,
                 "num_2d3d": candidate.num_correspondences,
+                "num_general_2d3d": num_general_2d3d,
+                "num_planar_2d3d": num_planar_2d3d,
                 "pyramid_visibility_score": score.pyramid_score,
                 "registered_neighbor_count": score.registered_neighbor_count,
                 "num_general_edges": score.num_general_edges,
@@ -422,6 +452,8 @@ def run_ba_filtering_cycle(
         "--report-name",
         ba_report,
     ]
+    if scope == "global" and args.optimize_shared_focal:
+        argv.extend(["--optimize-shared-focal", "--focal-bound-scale", str(args.focal_bound_scale)])
     if scope == "local":
         argv.extend(["--target-image", target_image, "--local-neighbors", str(local_neighbors)])
     call_tool(run_bundle_adjustment.main, argv)

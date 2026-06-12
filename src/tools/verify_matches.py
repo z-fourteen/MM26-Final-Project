@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
-from src.sfm.camera import estimate_simple_pinhole
+from src.sfm.camera import load_camera_from_feature, load_camera_overrides
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
 from src.sfm.geometry import (
@@ -91,6 +91,7 @@ def main() -> int:
     feature_dir = resolve_project_path(scene["feature_dir"])
     match_dir = resolve_project_path(scene["match_dir"])
     verified_dir = resolve_project_path(scene["verified_dir"])
+    sparse_dir = resolve_project_path(scene["sparse_dir"])
     output_dir = resolve_project_path(scene["output_dir"])
     figure_dir = output_dir / "figures"
     report_dir = output_dir / "reports"
@@ -112,10 +113,15 @@ def main() -> int:
     features = [load_features(feature_dir / f"{image_path.stem}.npz") for image_path in images]
     feature_by_name = {feature.image_name: feature for feature in features}
     cameras = {}
+    camera_overrides = load_camera_overrides(sparse_dir)
     for image_path in images:
-        feature_data = np.load(feature_dir / f"{image_path.stem}.npz")
-        width, height = [int(value) for value in feature_data["image_size"]]
-        cameras[image_path.name] = estimate_simple_pinhole(width, height, focal_scale=args.focal_scale)
+        cameras[image_path.name] = load_camera_from_feature(
+            feature_path=feature_dir / f"{image_path.stem}.npz",
+            image_path=image_path,
+            focal_scale=args.focal_scale,
+            prefer_exif=bool(default.get("camera", {}).get("estimate_focal_from_exif", True)),
+            override=camera_overrides.get(image_path.name),
+        )
 
     match_paths = load_match_paths(match_dir)
     if args.max_pairs > 0:

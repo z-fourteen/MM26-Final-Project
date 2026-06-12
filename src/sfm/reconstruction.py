@@ -36,6 +36,7 @@ class Candidate2D3D:
     points3d: np.ndarray
     keypoint_indices: np.ndarray
     point3d_ids: np.ndarray
+    match_sources: np.ndarray
 
     @property
     def num_correspondences(self) -> int:
@@ -149,16 +150,27 @@ def collect_candidate_correspondences(
     state: ReconstructionState,
     verified_dir: Path,
     keypoints_by_name: dict[str, np.ndarray],
+    allow_planar: bool = False,
+    min_general_correspondences: int = 30,
+    max_planar_fraction: float = 0.5,
 ) -> Candidate2D3D:
     lookup = observation_lookup(state)
-    correspondences: dict[int, tuple[int, int]] = {}
+    general_correspondences: dict[int, tuple[int, int, str]] = {}
+    planar_correspondences: dict[int, tuple[int, int, str]] = {}
 
     for registered_name in state.registered_images:
         verified_path = _find_verified_path(verified_dir, image_name, registered_name)
         if verified_path is None:
             continue
         data = np.load(verified_path)
-        if str(data["status"]) != "verified":
+        status = str(data["status"])
+        if status == "verified":
+            target = general_correspondences
+            source = "general"
+        elif allow_planar and status == "verified_planar":
+            target = planar_correspondences
+            source = "planar"
+        else:
             continue
         name1 = str(data["image_name1"])
         name2 = str(data["image_name2"])
@@ -175,7 +187,19 @@ def collect_candidate_correspondences(
             point3d_id = lookup.get((registered_name, registered_kp))
             if point3d_id is None:
                 continue
-            correspondences.setdefault(candidate_kp, (point3d_id, registered_kp))
+            target.setdefault(candidate_kp, (point3d_id, registered_kp, source))
+
+    correspondences = dict(general_correspondences)
+    if allow_planar:
+        num_general = len(general_correspondences)
+        planar_budget = max(0, int(max(num_general, min_general_correspondences) * max_planar_fraction))
+        for candidate_kp in sorted(planar_correspondences):
+            if candidate_kp in correspondences:
+                continue
+            if planar_budget <= 0:
+                break
+            correspondences[candidate_kp] = planar_correspondences[candidate_kp]
+            planar_budget -= 1
 
     if not correspondences:
         return Candidate2D3D(
@@ -184,10 +208,12 @@ def collect_candidate_correspondences(
             points3d=np.empty((0, 3), dtype=np.float64),
             keypoint_indices=np.empty((0,), dtype=np.int32),
             point3d_ids=np.empty((0,), dtype=np.int32),
+            match_sources=np.empty((0,), dtype="<U8"),
         )
 
     keypoint_indices = np.array(sorted(correspondences), dtype=np.int32)
     point3d_ids = np.array([correspondences[int(kp)][0] for kp in keypoint_indices], dtype=np.int32)
+    match_sources = np.array([correspondences[int(kp)][2] for kp in keypoint_indices])
     points2d = keypoints_by_name[image_name][keypoint_indices, :2].astype(np.float64)
     points3d = state.points3d[point3d_ids].astype(np.float64)
     return Candidate2D3D(
@@ -196,6 +222,7 @@ def collect_candidate_correspondences(
         points3d=points3d,
         keypoint_indices=keypoint_indices,
         point3d_ids=point3d_ids,
+        match_sources=match_sources,
     )
 
 
@@ -306,9 +333,20 @@ def register_image_pnp(
     min_pnp_inliers: int,
     reproj_error_px: float,
     confidence: float = 0.999,
+    min_inlier_ratio: float = 0.0,
+    max_mean_error_px: float = 0.0,
+    max_median_error_px: float = 0.0,
+    min_cheirality_ratio: float = 0.0,
+    min_depth_iqr: float = 0.0,
+    min_grid_coverage: int = 0,
+    grid_size: int = 4,
 ) -> RegistrationResult:
     if candidate.num_correspondences < min_2d3d:
         return _failed_registration(candidate, "not_enough_2d3d")
+    if min_grid_coverage > 0:
+        coverage = grid_coverage(candidate.points2d, camera.width, camera.height, grid_size=grid_size)
+        if coverage < min_grid_coverage:
+            return _failed_registration(candidate, "poor_spatial_coverage")
 
     success, rvec, tvec, inliers = cv2.solvePnPRansac(
         objectPoints=candidate.points3d.astype(np.float64),
@@ -322,6 +360,8 @@ def register_image_pnp(
     )
     if not success or inliers is None or len(inliers) < min_pnp_inliers:
         return _failed_registration(candidate, "pnp_failed")
+    if min_inlier_ratio > 0 and float(len(inliers)) / float(max(candidate.num_correspondences, 1)) < min_inlier_ratio:
+        return _failed_registration(candidate, "low_pnp_inlier_ratio")
 
     inlier_indices = inliers.ravel().astype(np.int32)
     inlier_points3d = candidate.points3d[inlier_indices]
@@ -339,7 +379,20 @@ def register_image_pnp(
     R, _ = cv2.Rodrigues(rvec)
     t = tvec.reshape(3).astype(np.float64)
     projected = project_points(camera.K, R, t, inlier_points3d)
-    mean_error = float(np.mean(np.linalg.norm(projected - inlier_points2d, axis=1)))
+    errors = np.linalg.norm(projected - inlier_points2d, axis=1)
+    mean_error = float(np.mean(errors))
+    median_error = float(np.median(errors))
+    depths = camera_depths_for_pose(R, t, inlier_points3d)
+    cheirality_ratio = float(np.mean(depths > 1e-8)) if depths.size else 0.0
+    depth_iqr = float(np.percentile(depths, 75) - np.percentile(depths, 25)) if depths.size else 0.0
+    if max_mean_error_px > 0 and mean_error > max_mean_error_px:
+        return _failed_registration(candidate, "high_pnp_mean_error")
+    if max_median_error_px > 0 and median_error > max_median_error_px:
+        return _failed_registration(candidate, "high_pnp_median_error")
+    if min_cheirality_ratio > 0 and cheirality_ratio < min_cheirality_ratio:
+        return _failed_registration(candidate, "low_cheirality")
+    if min_depth_iqr > 0 and depth_iqr < min_depth_iqr:
+        return _failed_registration(candidate, "low_depth_dispersion")
     return RegistrationResult(
         image_name=candidate.image_name,
         success=True,
@@ -367,6 +420,22 @@ def _failed_registration(candidate: Candidate2D3D, status: str) -> RegistrationR
         keypoint_indices=np.empty((0,), dtype=np.int32),
         point3d_ids=np.empty((0,), dtype=np.int32),
     )
+
+
+def grid_coverage(points2d: np.ndarray, width: int, height: int, grid_size: int = 4) -> int:
+    if points2d.size == 0:
+        return 0
+    cells = max(int(grid_size), 1)
+    xs = np.clip(points2d[:, 0], 0.0, np.nextafter(float(max(width, 1)), 0.0))
+    ys = np.clip(points2d[:, 1], 0.0, np.nextafter(float(max(height, 1)), 0.0))
+    x_cells = np.floor(xs / float(max(width, 1)) * cells).astype(np.int32)
+    y_cells = np.floor(ys / float(max(height, 1)) * cells).astype(np.int32)
+    return len(set(zip(x_cells.tolist(), y_cells.tolist())))
+
+
+def camera_depths_for_pose(R: np.ndarray, t: np.ndarray, points3d: np.ndarray) -> np.ndarray:
+    camera_points = (R @ points3d.T + t.reshape(3, 1)).T
+    return camera_points[:, 2]
 
 
 def add_registered_image(state: ReconstructionState, result: RegistrationResult) -> None:

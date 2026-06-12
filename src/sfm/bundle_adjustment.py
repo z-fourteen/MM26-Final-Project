@@ -23,13 +23,17 @@ class BundleAdjustmentProblem:
     observation_points2d: np.ndarray
     camera_param_slices: dict[str, slice]
     point_param_slices: dict[int, slice]
+    shared_focal_slice: slice | None
     initial_params: np.ndarray
     observation_groups_by_image: dict[str, np.ndarray]
+    initial_shared_focal: float
+    optimize_shared_focal: bool
 
 
 @dataclass(frozen=True)
 class BundleAdjustmentResult:
     optimized_state: ReconstructionState
+    optimized_cameras: dict[str, PinholeCamera]
     problem: BundleAdjustmentProblem
     initial_errors: np.ndarray
     final_errors: np.ndarray
@@ -41,6 +45,8 @@ class BundleAdjustmentResult:
     num_function_evaluations: int
     success: bool
     message: str
+    initial_shared_focal: float
+    final_shared_focal: float
 
 
 def build_bundle_adjustment_problem(
@@ -53,6 +59,8 @@ def build_bundle_adjustment_problem(
     scope: str = "global",
     local_image_names: list[str] | None = None,
     point_priority_errors: dict[int, float] | None = None,
+    cameras: dict[str, PinholeCamera] | None = None,
+    optimize_shared_focal: bool = False,
 ) -> BundleAdjustmentProblem:
     if scope not in {"global", "local"}:
         raise ValueError(f"Unsupported BA scope: {scope}")
@@ -137,6 +145,23 @@ def build_bundle_adjustment_problem(
         params.extend(state.points3d[int(point_id)].astype(np.float64).tolist())
         point_param_slices[int(point_id)] = slice(start, start + 3)
 
+    initial_shared_focal = 0.0
+    shared_focal_slice = None
+    if optimize_shared_focal:
+        if not cameras:
+            raise ValueError("Shared focal optimization requires cameras.")
+        registered_focals = [
+            float(cameras[image_name].fx)
+            for image_name in image_names
+            if image_name in cameras
+        ]
+        if not registered_focals:
+            raise ValueError("No registered camera intrinsics available for shared focal optimization.")
+        initial_shared_focal = float(np.median(registered_focals))
+        start = len(params)
+        params.append(initial_shared_focal)
+        shared_focal_slice = slice(start, start + 1)
+
     observation_points2d = np.asarray(
         [
             keypoints_by_name[str(observation["image_name"])][int(observation["keypoint_idx"]), :2]
@@ -159,11 +184,14 @@ def build_bundle_adjustment_problem(
         observation_points2d=observation_points2d,
         camera_param_slices=camera_param_slices,
         point_param_slices=point_param_slices,
+        shared_focal_slice=shared_focal_slice,
         initial_params=np.asarray(params, dtype=np.float64),
         observation_groups_by_image={
             image_name: np.asarray(indices, dtype=np.int32)
             for image_name, indices in observation_groups_by_image.items()
         },
+        initial_shared_focal=initial_shared_focal,
+        optimize_shared_focal=optimize_shared_focal,
     )
 
 
@@ -218,6 +246,8 @@ def run_bundle_adjustment(
     scope: str = "global",
     local_image_names: list[str] | None = None,
     point_priority_errors: dict[int, float] | None = None,
+    optimize_shared_focal: bool = False,
+    focal_bound_scale: float = 2.0,
 ) -> BundleAdjustmentResult:
     problem = build_bundle_adjustment_problem(
         state=state,
@@ -229,11 +259,14 @@ def run_bundle_adjustment(
         scope=scope,
         local_image_names=local_image_names,
         point_priority_errors=point_priority_errors,
+        cameras=cameras,
+        optimize_shared_focal=optimize_shared_focal,
     )
     if problem.initial_params.size == 0 or not problem.observations:
         raise ValueError("Bundle adjustment problem is empty.")
 
     initial_residuals = ba_residuals(problem.initial_params, state, problem, cameras)
+    lower_bounds, upper_bounds = bundle_adjustment_bounds(problem, focal_bound_scale=focal_bound_scale)
     result = least_squares(
         fun=lambda params: ba_residuals(params, state, problem, cameras),
         x0=problem.initial_params,
@@ -241,12 +274,15 @@ def run_bundle_adjustment(
         loss=loss,
         f_scale=f_scale,
         max_nfev=max_iterations,
+        bounds=(lower_bounds, upper_bounds),
         verbose=0,
     )
     final_residuals = ba_residuals(result.x, state, problem, cameras)
     optimized_state = apply_bundle_adjustment_result(state, problem, result.x)
+    optimized_cameras = apply_camera_result(cameras, problem, result.x)
     return BundleAdjustmentResult(
         optimized_state=optimized_state,
+        optimized_cameras=optimized_cameras,
         problem=problem,
         initial_errors=residuals_to_errors(initial_residuals),
         final_errors=residuals_to_errors(final_residuals),
@@ -258,6 +294,8 @@ def run_bundle_adjustment(
         num_function_evaluations=int(result.nfev),
         success=bool(result.success),
         message=str(result.message),
+        initial_shared_focal=problem.initial_shared_focal,
+        final_shared_focal=shared_focal_from_params(result.x, problem),
     )
 
 
@@ -361,7 +399,20 @@ def bundle_adjustment_sparsity(problem: BundleAdjustmentProblem):
             sparsity[rows, camera_slice] = 1
         point_slice = problem.point_param_slices[int(observation["point3D_id"])]
         sparsity[rows, point_slice] = 1
+        if problem.shared_focal_slice is not None:
+            sparsity[rows, problem.shared_focal_slice] = 1
     return sparsity.tocsr()
+
+
+def bundle_adjustment_bounds(problem: BundleAdjustmentProblem, focal_bound_scale: float) -> tuple[np.ndarray, np.ndarray]:
+    lower = np.full(problem.initial_params.shape, -np.inf, dtype=np.float64)
+    upper = np.full(problem.initial_params.shape, np.inf, dtype=np.float64)
+    if problem.shared_focal_slice is not None:
+        scale = max(float(focal_bound_scale), 1.01)
+        focal = max(float(problem.initial_shared_focal), 1e-6)
+        lower[problem.shared_focal_slice] = focal / scale
+        upper[problem.shared_focal_slice] = focal * scale
+    return lower, upper
 
 
 def ba_residuals(
@@ -379,7 +430,8 @@ def ba_residuals(
                 for index in observation_indices
             ]
         )
-        projected = project_points(cameras[image_name].K, R, t, points3d)
+        camera = camera_from_params(params, problem, cameras[image_name])
+        projected = project_points(camera.K, R, t, points3d)
         residuals[observation_indices] = projected - problem.observation_points2d[observation_indices]
     return residuals.reshape(-1)
 
@@ -424,6 +476,40 @@ def apply_bundle_adjustment_result(
     for point_id in problem.point_ids:
         state.points3d[int(point_id)] = point_from_params(params, state, problem, int(point_id))
     return state
+
+
+def shared_focal_from_params(params: np.ndarray, problem: BundleAdjustmentProblem) -> float:
+    if problem.shared_focal_slice is None:
+        return problem.initial_shared_focal
+    return float(params[problem.shared_focal_slice][0])
+
+
+def camera_from_params(params: np.ndarray, problem: BundleAdjustmentProblem, camera: PinholeCamera) -> PinholeCamera:
+    if problem.shared_focal_slice is None:
+        return camera
+    focal = shared_focal_from_params(params, problem)
+    return PinholeCamera(
+        width=camera.width,
+        height=camera.height,
+        fx=focal,
+        fy=focal,
+        cx=camera.cx,
+        cy=camera.cy,
+        source="bundle_adjustment",
+    )
+
+
+def apply_camera_result(
+    cameras: dict[str, PinholeCamera],
+    problem: BundleAdjustmentProblem,
+    params: np.ndarray,
+) -> dict[str, PinholeCamera]:
+    if problem.shared_focal_slice is None:
+        return cameras
+    return {
+        image_name: camera_from_params(params, problem, camera)
+        for image_name, camera in cameras.items()
+    }
 
 
 def residuals_to_errors(residuals: np.ndarray) -> np.ndarray:

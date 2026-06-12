@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.sfm.camera import estimate_simple_pinhole
+from src.sfm.camera import load_camera_from_feature, load_camera_overrides
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.sfm.features import list_images
 from src.sfm.initialization import (
@@ -78,6 +78,7 @@ def main() -> int:
     feature_cache = {}
     image_cache = {}
     camera_cache = {}
+    camera_overrides = load_camera_overrides(sparse_dir)
     for rank, edge in enumerate(candidates, start=1):
         verified_path = Path(edge["verified_path"])
         if not verified_path.is_absolute():
@@ -89,8 +90,26 @@ def main() -> int:
         features2 = feature_cache.setdefault(image_path2.name, load_features(feature_dir / f"{image_path2.stem}.npz"))
         image1_rgb = image_cache.setdefault(image_path1.name, read_rgb(image_path1))
         image2_rgb = image_cache.setdefault(image_path2.name, read_rgb(image_path2))
-        camera1 = camera_cache.setdefault(image_path1.name, camera_from_rgb(image1_rgb, args.focal_scale))
-        camera2 = camera_cache.setdefault(image_path2.name, camera_from_rgb(image2_rgb, args.focal_scale))
+        camera1 = camera_cache.setdefault(
+            image_path1.name,
+            camera_from_feature(
+                feature_dir / f"{image_path1.stem}.npz",
+                image_path1,
+                args.focal_scale,
+                bool(default.get("camera", {}).get("estimate_focal_from_exif", True)),
+                camera_overrides.get(image_path1.name),
+            ),
+        )
+        camera2 = camera_cache.setdefault(
+            image_path2.name,
+            camera_from_feature(
+                feature_dir / f"{image_path2.stem}.npz",
+                image_path2,
+                args.focal_scale,
+                bool(default.get("camera", {}).get("estimate_focal_from_exif", True)),
+                camera_overrides.get(image_path2.name),
+            ),
+        )
 
         candidate_result = initialize_two_view(
             edge=edge,
@@ -211,9 +230,14 @@ def main() -> int:
     return 0
 
 
-def camera_from_rgb(image_rgb: np.ndarray, focal_scale: float):
-    height, width = image_rgb.shape[:2]
-    return estimate_simple_pinhole(width=width, height=height, focal_scale=focal_scale)
+def camera_from_feature(feature_path: Path, image_path: Path, focal_scale: float, prefer_exif: bool, override: dict | None):
+    return load_camera_from_feature(
+        feature_path=feature_path,
+        image_path=image_path,
+        focal_scale=focal_scale,
+        prefer_exif=prefer_exif,
+        override=override,
+    )
 
 
 def summarize_candidate(edge: dict, rank: int) -> dict:
