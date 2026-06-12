@@ -7,10 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
-from src.sfm.camera import estimate_simple_pinhole
 from src.sfm.config import load_scene_config, resolve_project_path
-from src.sfm.features import list_images
-from src.sfm.matching import load_features
+from src.sfm.filtering import filter_reconstruction_by_ba_errors
 from src.sfm.reconstruction import (
     Candidate2D3D,
     NextBestViewScore,
@@ -21,8 +19,13 @@ from src.sfm.reconstruction import (
     save_reconstruction_state,
     score_next_best_view,
 )
+from src.sfm.residuals import (
+    evaluate_registered_residuals_in_memory,
+    write_residual_npz,
+    write_residual_report,
+)
+from src.sfm.runtime import SfMRuntimeContext, load_runtime_context
 from src.tools import evaluate_degenerate_cameras
-from src.tools import evaluate_registered_residuals
 from src.tools import filter_reconstruction
 from src.tools import run_bundle_adjustment
 from src.tools import triangulate_registered_tracks
@@ -63,24 +66,11 @@ def main() -> int:
     config = load_scene_config(args.scene)
     default = config["default"]
     scene = config["scene"]
-    image_dir = resolve_project_path(scene["image_dir"])
-    feature_dir = resolve_project_path(scene["feature_dir"])
-    verified_dir = resolve_project_path(scene["verified_dir"])
     sparse_dir = resolve_project_path(scene["sparse_dir"])
     output_dir = resolve_project_path(scene["output_dir"])
     report_dir = output_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
-
-    images = list_images(image_dir)
-    keypoints_by_name = {
-        image_path.name: load_features(feature_dir / f"{image_path.stem}.npz").keypoints
-        for image_path in images
-    }
-    cameras = {}
-    for image_path in images:
-        feature_data = np.load(feature_dir / f"{image_path.stem}.npz")
-        width, height = [int(value) for value in feature_data["image_size"]]
-        cameras[image_path.name] = estimate_simple_pinhole(width, height, focal_scale=args.focal_scale)
+    runtime = load_runtime_context(args.scene, focal_scale=args.focal_scale)
 
     max_reproj_error = float(default["sfm"].get("max_reproj_error_px", 8.0))
     pnp_confidence = float(default["sfm"].get("ransac_confidence", 0.999))
@@ -97,11 +87,11 @@ def main() -> int:
     for iteration in range(1, args.max_register + 1):
         state = load_reconstruction_state(sparse_dir)
         selected = select_next_image(
-            images=images,
+            images=runtime.image_paths,
             state=state,
-            verified_dir=verified_dir,
-            keypoints_by_name=keypoints_by_name,
-            cameras=cameras,
+            verified_dir=runtime.verified_dir,
+            keypoints_by_name=runtime.keypoints_by_name,
+            cameras=runtime.cameras,
             failed_images=failed_images,
             min_2d3d=args.min_2d3d,
             visibility_levels=args.visibility_levels,
@@ -111,7 +101,7 @@ def main() -> int:
         candidate, score = selected
         registration = register_image_pnp(
             candidate=candidate,
-            camera=cameras[candidate.image_name],
+            camera=runtime.cameras[candidate.image_name],
             min_2d3d=args.min_2d3d,
             min_pnp_inliers=args.min_pnp_inliers,
             reproj_error_px=max_reproj_error,
@@ -143,6 +133,7 @@ def main() -> int:
             record["reports"].extend(
                 run_ba_filtering_cycle(
                     args=args,
+                    runtime=runtime,
                     stage_prefix=f"iter{iteration:02d}_{Path(registration.image_name).stem}_local",
                     scope="local",
                     target_image=registration.image_name,
@@ -160,7 +151,9 @@ def main() -> int:
             last_global_ba_images=last_global_ba_images,
             last_global_ba_points=last_global_ba_points,
         ):
-            record["reports"].extend(run_global_refinement(args, stage_prefix=f"iter{iteration:02d}_growth_global"))
+            record["reports"].extend(
+                run_global_refinement(args, runtime=runtime, stage_prefix=f"iter{iteration:02d}_growth_global")
+            )
             state = load_reconstruction_state(sparse_dir)
             last_global_ba_images = len(state.registered_images)
             last_global_ba_points = int(state.points3d.shape[0])
@@ -169,20 +162,11 @@ def main() -> int:
 
     final_reports = []
     if args.run_final_refinement:
-        final_reports = run_global_refinement(args, stage_prefix="final_global")
+        final_reports = run_global_refinement(args, runtime=runtime, stage_prefix="final_global")
 
     final_state = load_reconstruction_state(sparse_dir)
     final_residual_report = "paper_aligned_final_registered_residual_report.json"
-    call_tool(
-        evaluate_registered_residuals.main,
-        [
-            "evaluate_registered_residuals",
-            "--scene",
-            args.scene,
-            "--report-name",
-            final_residual_report,
-        ],
-    )
+    write_registered_residual_report(args, runtime, final_residual_report)
     report = {
         "scene_name": scene["scene_name"],
         "initial_registered_images": initial_registered_images,
@@ -268,12 +252,13 @@ def run_rt(args: argparse.Namespace, stage_prefix: str, stage: str = "registered
     return [{"stage": stage_prefix, "type": "rt", "report_name": report_name}]
 
 
-def run_global_refinement(args: argparse.Namespace, stage_prefix: str) -> list[dict]:
+def run_global_refinement(args: argparse.Namespace, runtime: SfMRuntimeContext, stage_prefix: str) -> list[dict]:
     reports = []
     reports.extend(run_rt(args, stage_prefix=f"{stage_prefix}_pre", stage="pre_ba_rt"))
     reports.extend(
         run_ba_filtering_cycle(
             args=args,
+            runtime=runtime,
             stage_prefix=f"{stage_prefix}_ba1",
             scope="global",
             target_image="",
@@ -290,6 +275,7 @@ def run_global_refinement(args: argparse.Namespace, stage_prefix: str) -> list[d
     reports.extend(
         run_ba_filtering_cycle(
             args=args,
+            runtime=runtime,
             stage_prefix=f"{stage_prefix}_ba2",
             scope="global",
             target_image="",
@@ -325,6 +311,7 @@ def run_rt_with_residual(args: argparse.Namespace, stage_prefix: str, residual_r
 
 def run_ba_filtering_cycle(
     args: argparse.Namespace,
+    runtime: SfMRuntimeContext,
     stage_prefix: str,
     scope: str,
     target_image: str,
@@ -334,6 +321,14 @@ def run_ba_filtering_cycle(
     local_neighbors: int,
 ) -> list[dict]:
     reports = []
+    priority_report = f"{stage_prefix}_priority_residual_report.json"
+    priority_report_path = write_registered_residual_report(
+        args,
+        runtime,
+        priority_report,
+        compact=True,
+        write_npz=True,
+    )
     ba_report = f"{stage_prefix}_ba_report.json"
     argv = [
         "run_bundle_adjustment",
@@ -353,6 +348,8 @@ def run_ba_filtering_cycle(
         str(max_observations),
         "--min-track-length",
         str(args.filter_min_track_length),
+        "--priority-residual-report",
+        priority_report_path,
         "--report-name",
         ba_report,
     ]
@@ -362,15 +359,12 @@ def run_ba_filtering_cycle(
     reports.append({"stage": stage_prefix, "type": "ba", "report_name": ba_report})
 
     residual_report = f"{stage_prefix}_registered_residual_report.json"
-    call_tool(
-        evaluate_registered_residuals.main,
-        [
-            "evaluate_registered_residuals",
-            "--scene",
-            args.scene,
-            "--report-name",
-            residual_report,
-        ],
+    residual_report_path = write_registered_residual_report(
+        args,
+        runtime,
+        residual_report,
+        compact=True,
+        write_npz=True,
     )
     reports.append({"stage": stage_prefix, "type": "registered_residual", "report_name": residual_report})
 
@@ -384,7 +378,7 @@ def run_ba_filtering_cycle(
                 "--scene",
                 args.scene,
                 "--ba-report",
-                report_path_for_scene(args.scene, residual_report),
+                residual_report_path,
                 "--max-reprojection-error",
                 str(args.filter_max_reprojection_error),
                 "--max-point-median-error",
@@ -399,15 +393,12 @@ def run_ba_filtering_cycle(
         )
         reports.append({"stage": stage_prefix, "type": "filtering", "report_name": filtering_report})
         residual_for_degenerate = f"{stage_prefix}_registered_residual_after_filtering_report.json"
-        call_tool(
-            evaluate_registered_residuals.main,
-            [
-                "evaluate_registered_residuals",
-                "--scene",
-                args.scene,
-                "--report-name",
-                residual_for_degenerate,
-            ],
+        write_registered_residual_report(
+            args,
+            runtime,
+            residual_for_degenerate,
+            compact=True,
+            write_npz=True,
         )
         reports.append(
             {"stage": stage_prefix, "type": "registered_residual_after_filtering", "report_name": residual_for_degenerate}
@@ -445,6 +436,36 @@ def report_path_for_scene(scene_path: str, report_name: str) -> str:
     config = load_scene_config(scene_path)
     report_dir = resolve_project_path(config["scene"]["output_dir"]) / "reports"
     return str(report_dir / report_name)
+
+
+def write_registered_residual_report(
+    args: argparse.Namespace,
+    runtime: SfMRuntimeContext,
+    report_name: str,
+    compact: bool = False,
+    write_npz: bool = False,
+) -> str:
+    state = load_reconstruction_state(runtime.sparse_dir)
+    observations, errors, summary = evaluate_registered_residuals_in_memory(
+        state=state,
+        cameras=runtime.cameras,
+        keypoints_by_name=runtime.keypoints_by_name,
+    )
+    report_path = runtime.report_dir / report_name
+    npz_name = None
+    if write_npz:
+        npz_name = f"{report_path.stem}_errors.npz"
+        write_residual_npz(runtime.report_dir / npz_name, observations, errors)
+    write_residual_report(
+        report_path=report_path,
+        scene_name=runtime.config["scene"]["scene_name"],
+        observations=observations,
+        errors=errors,
+        summary=summary,
+        compact=compact,
+        npz_name=npz_name,
+    )
+    return str(report_path)
 
 
 def call_tool(main_func, argv: list[str]) -> None:

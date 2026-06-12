@@ -34,6 +34,7 @@ def main() -> int:
     parser.add_argument("--scope", default="global", choices=["global", "local"])
     parser.add_argument("--target-image", default="", help="Target registered image for local BA.")
     parser.add_argument("--local-neighbors", type=int, default=6)
+    parser.add_argument("--priority-residual-report", default="", help="Residual report used to prioritize BA points.")
     parser.add_argument("--report-name", default="bundle_adjustment_report.json")
     parser.add_argument("--dry-run", action="store_true", help="Run BA and report metrics without writing optimized state.")
     args = parser.parse_args()
@@ -75,6 +76,9 @@ def main() -> int:
     else:
         fixed_image_name = next(iter(state.registered_images))
     covisibility_edges = build_covisibility_graph(state)
+    point_priority_errors = {}
+    if args.priority_residual_report:
+        point_priority_errors = load_point_priority_errors(Path(args.priority_residual_report))
 
     result = run_bundle_adjustment(
         state=state,
@@ -89,6 +93,7 @@ def main() -> int:
         min_track_length=args.min_track_length,
         scope=args.scope,
         local_image_names=local_image_names,
+        point_priority_errors=point_priority_errors,
     )
 
     backup_paths = {}
@@ -125,6 +130,8 @@ def main() -> int:
         "max_points": args.max_points,
         "max_observations": args.max_observations,
         "min_track_length": args.min_track_length,
+        "priority_residual_report": args.priority_residual_report,
+        "num_priority_points": len(point_priority_errors),
         "optimizer_success": result.success,
         "optimizer_message": result.message,
         "num_function_evaluations": result.num_function_evaluations,
@@ -217,6 +224,29 @@ def unique_backup_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
     raise RuntimeError(f"Could not create a unique backup path for {path}")
+
+
+def load_point_priority_errors(report_path: Path) -> dict[int, float]:
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["ba_report_path"] = str(report_path)
+    if "observation_errors_npz" in report:
+        npz_path = Path(str(report["observation_errors_npz"]))
+        if not npz_path.is_absolute():
+            npz_path = report_path.parent / npz_path
+        data = np.load(npz_path)
+        point_ids = data["point3D_ids"].astype(np.int32)
+        errors = data["reprojection_errors"].astype(np.float64)
+    else:
+        records = report.get("observation_errors", report.get("optimized_observation_errors", []))
+        point_ids = np.asarray([int(record["point3D_id"]) for record in records], dtype=np.int32)
+        errors = np.asarray(
+            [float(record["final_error"] if "final_error" in record else record["reprojection_error"]) for record in records],
+            dtype=np.float64,
+        )
+    grouped: dict[int, float] = {}
+    for point_id, error in zip(point_ids, errors):
+        grouped[int(point_id)] = max(float(error), grouped.get(int(point_id), 0.0))
+    return grouped
 
 
 if __name__ == "__main__":

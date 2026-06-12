@@ -33,6 +33,7 @@ def main() -> int:
 
     ba_report_path = Path(args.ba_report) if args.ba_report else report_dir / "bundle_adjustment_report.json"
     ba_report = json.loads(ba_report_path.read_text(encoding="utf-8"))
+    ba_report["ba_report_path"] = str(ba_report_path)
     ba_observations, ba_errors = load_ba_observation_errors(ba_report)
 
     state = load_reconstruction_state(sparse_dir)
@@ -76,6 +77,25 @@ def main() -> int:
 
 
 def load_ba_observation_errors(ba_report: dict) -> tuple[list[dict], np.ndarray]:
+    if "observation_errors_npz" in ba_report:
+        report_path = Path(ba_report.get("ba_report_path", ""))
+        npz_path = Path(str(ba_report["observation_errors_npz"]))
+        if not npz_path.is_absolute() and report_path:
+            npz_path = report_path.parent / npz_path
+        data = np.load(npz_path)
+        observations = [
+            {
+                "point3D_id": int(point_id),
+                "image_name": str(image_name),
+                "keypoint_idx": int(keypoint_idx),
+            }
+            for point_id, image_name, keypoint_idx in zip(
+                data["point3D_ids"],
+                data["image_names"],
+                data["keypoint_indices"],
+            )
+        ]
+        return observations, data["reprojection_errors"].astype(np.float64)
     records = ba_report.get("observation_errors", ba_report.get("optimized_observation_errors", []))
     if not records:
         raise ValueError("Residual report does not contain observation_errors or optimized_observation_errors.")

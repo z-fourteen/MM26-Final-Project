@@ -24,6 +24,7 @@ class BundleAdjustmentProblem:
     camera_param_slices: dict[str, slice]
     point_param_slices: dict[int, slice]
     initial_params: np.ndarray
+    observation_groups_by_image: dict[str, np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ def build_bundle_adjustment_problem(
     min_track_length: int,
     scope: str = "global",
     local_image_names: list[str] | None = None,
+    point_priority_errors: dict[int, float] | None = None,
 ) -> BundleAdjustmentProblem:
     if scope not in {"global", "local"}:
         raise ValueError(f"Unsupported BA scope: {scope}")
@@ -78,7 +80,14 @@ def build_bundle_adjustment_problem(
         if len(observations) >= min_track_length
         and (scope == "global" or any(str(observation["image_name"]) in local_image_set for observation in observations))
     ]
-    eligible_point_ids.sort(key=lambda point_id: len(point_observations[point_id]), reverse=True)
+    point_priority_errors = point_priority_errors or {}
+    eligible_point_ids.sort(
+        key=lambda point_id: (
+            float(point_priority_errors.get(point_id, 0.0)),
+            len(point_observations[point_id]),
+        ),
+        reverse=True,
+    )
     if max_points > 0:
         eligible_point_ids = eligible_point_ids[:max_points]
     selected_point_ids = np.asarray(sorted(eligible_point_ids), dtype=np.int32)
@@ -135,6 +144,9 @@ def build_bundle_adjustment_problem(
         ],
         dtype=np.float64,
     )
+    observation_groups_by_image: dict[str, list[int]] = {}
+    for observation_index, observation in enumerate(observations):
+        observation_groups_by_image.setdefault(str(observation["image_name"]), []).append(observation_index)
 
     return BundleAdjustmentProblem(
         scope=scope,
@@ -148,6 +160,10 @@ def build_bundle_adjustment_problem(
         camera_param_slices=camera_param_slices,
         point_param_slices=point_param_slices,
         initial_params=np.asarray(params, dtype=np.float64),
+        observation_groups_by_image={
+            image_name: np.asarray(indices, dtype=np.int32)
+            for image_name, indices in observation_groups_by_image.items()
+        },
     )
 
 
@@ -201,6 +217,7 @@ def run_bundle_adjustment(
     min_track_length: int,
     scope: str = "global",
     local_image_names: list[str] | None = None,
+    point_priority_errors: dict[int, float] | None = None,
 ) -> BundleAdjustmentResult:
     problem = build_bundle_adjustment_problem(
         state=state,
@@ -211,6 +228,7 @@ def run_bundle_adjustment(
         min_track_length=min_track_length,
         scope=scope,
         local_image_names=local_image_names,
+        point_priority_errors=point_priority_errors,
     )
     if problem.initial_params.size == 0 or not problem.observations:
         raise ValueError("Bundle adjustment problem is empty.")
@@ -353,13 +371,16 @@ def ba_residuals(
     cameras: dict[str, PinholeCamera],
 ) -> np.ndarray:
     residuals = np.empty((len(problem.observations), 2), dtype=np.float64)
-    for index, observation in enumerate(problem.observations):
-        image_name = str(observation["image_name"])
-        point_id = int(observation["point3D_id"])
+    for image_name, observation_indices in problem.observation_groups_by_image.items():
         R, t = pose_from_params(params, state, problem, image_name)
-        point3d = point_from_params(params, state, problem, point_id)
-        projected = project_points(cameras[image_name].K, R, t, point3d.reshape(1, 3))[0]
-        residuals[index] = projected - problem.observation_points2d[index]
+        points3d = np.stack(
+            [
+                point_from_params(params, state, problem, int(problem.observations[int(index)]["point3D_id"]))
+                for index in observation_indices
+            ]
+        )
+        projected = project_points(cameras[image_name].K, R, t, points3d)
+        residuals[observation_indices] = projected - problem.observation_points2d[observation_indices]
     return residuals.reshape(-1)
 
 
