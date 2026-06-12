@@ -690,6 +690,7 @@ def main() -> int:
         "points_npz_path": str(sparse_dir / "reconstruction_points.npz"),
     }
     report_path = report_dir / args.report_name
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"Scene: {scene['scene_name']}")

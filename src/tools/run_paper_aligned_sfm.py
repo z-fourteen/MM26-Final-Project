@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -73,6 +75,16 @@ def main() -> int:
     parser.add_argument("--use-track-cache", action="store_true")
     parser.add_argument("--run-final-refinement", action="store_true")
     parser.add_argument("--report-name", default="paper_aligned_sfm_report.json")
+    parser.add_argument(
+        "--report-run-id",
+        default="",
+        help="Subdirectory under reports/ used to isolate this controller run. Defaults to a timestamped id.",
+    )
+    parser.add_argument(
+        "--flat-report-dir",
+        action="store_true",
+        help="Write reports directly under reports/ for legacy behavior.",
+    )
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -80,8 +92,18 @@ def main() -> int:
     scene = config["scene"]
     sparse_dir = resolve_project_path(scene["sparse_dir"])
     output_dir = resolve_project_path(scene["output_dir"])
-    report_dir = output_dir / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
+    report_root = output_dir / "reports"
+    report_root.mkdir(parents=True, exist_ok=True)
+    report_run_id = ""
+    if not args.flat_report_dir:
+        report_run_id = sanitize_report_run_id(
+            args.report_run_id or f"{scene['scene_name']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        )
+        report_dir = report_root / report_run_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        report_dir = report_root
+    args.report_run_id = report_run_id
     runtime = load_runtime_context(args.scene, focal_scale=args.focal_scale)
 
     max_reproj_error = float(default["sfm"].get("max_reproj_error_px", 8.0))
@@ -196,10 +218,12 @@ def main() -> int:
         final_reports = run_global_refinement(args, runtime=runtime, stage_prefix="final_global")
 
     final_state = load_reconstruction_state(sparse_dir)
-    final_residual_report = "paper_aligned_final_registered_residual_report.json"
+    final_residual_report = scoped_report_name(args, "paper_aligned_final_registered_residual_report.json")
     write_registered_residual_report(args, runtime, final_residual_report)
     report = {
         "scene_name": scene["scene_name"],
+        "report_run_id": report_run_id,
+        "report_dir": str(report_dir),
         "initial_registered_images": initial_registered_images,
         "final_registered_images": len(final_state.registered_images),
         "initial_points3D": initial_points3d,
@@ -236,7 +260,8 @@ def main() -> int:
         "final_refinement_reports": final_reports,
         "final_residual_report": final_residual_report,
     }
-    report_path = report_dir / args.report_name
+    report_path = report_root / scoped_report_name(args, Path(args.report_name).name)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"Scene: {scene['scene_name']}")
@@ -331,7 +356,7 @@ def strip_candidate_payloads(candidate_diagnostics: list[dict], limit: int) -> l
 
 
 def run_rt(args: argparse.Namespace, stage_prefix: str, stage: str = "registered_rt") -> list[dict]:
-    report_name = f"{stage_prefix}_rt_report.json"
+    report_name = scoped_report_name(args, f"{stage_prefix}_rt_report.json")
     argv = [
         "triangulate_registered_tracks",
         "--scene",
@@ -365,9 +390,15 @@ def run_global_refinement(args: argparse.Namespace, runtime: SfMRuntimeContext, 
             local_neighbors=args.local_ba_neighbors,
         )
     )
-    residual_report = report_path_for_scene(args.scene, f"{stage_prefix}_ba1_registered_residual_after_filtering_report.json")
+    residual_report = report_path_for_scene(
+        args.scene,
+        scoped_report_name(args, f"{stage_prefix}_ba1_registered_residual_after_filtering_report.json"),
+    )
     if not Path(residual_report).exists():
-        residual_report = report_path_for_scene(args.scene, f"{stage_prefix}_ba1_registered_residual_report.json")
+        residual_report = report_path_for_scene(
+            args.scene,
+            scoped_report_name(args, f"{stage_prefix}_ba1_registered_residual_report.json"),
+        )
     reports.extend(run_rt_with_residual(args, stage_prefix=f"{stage_prefix}_post", residual_report=residual_report))
     reports.extend(
         run_ba_filtering_cycle(
@@ -386,7 +417,7 @@ def run_global_refinement(args: argparse.Namespace, runtime: SfMRuntimeContext, 
 
 
 def run_rt_with_residual(args: argparse.Namespace, stage_prefix: str, residual_report: str) -> list[dict]:
-    report_name = f"{stage_prefix}_rt_report.json"
+    report_name = scoped_report_name(args, f"{stage_prefix}_rt_report.json")
     argv = [
         "triangulate_registered_tracks",
         "--scene",
@@ -420,7 +451,7 @@ def run_ba_filtering_cycle(
     local_neighbors: int,
 ) -> list[dict]:
     reports = []
-    priority_report = f"{stage_prefix}_priority_residual_report.json"
+    priority_report = scoped_report_name(args, f"{stage_prefix}_priority_residual_report.json")
     priority_report_path = write_registered_residual_report(
         args,
         runtime,
@@ -428,7 +459,7 @@ def run_ba_filtering_cycle(
         compact=True,
         write_npz=True,
     )
-    ba_report = f"{stage_prefix}_ba_report.json"
+    ba_report = scoped_report_name(args, f"{stage_prefix}_ba_report.json")
     argv = [
         "run_bundle_adjustment",
         "--scene",
@@ -459,7 +490,7 @@ def run_ba_filtering_cycle(
     call_tool(run_bundle_adjustment.main, argv)
     reports.append({"stage": stage_prefix, "type": "ba", "report_name": ba_report})
 
-    residual_report = f"{stage_prefix}_registered_residual_report.json"
+    residual_report = scoped_report_name(args, f"{stage_prefix}_registered_residual_report.json")
     residual_report_path = write_registered_residual_report(
         args,
         runtime,
@@ -471,7 +502,7 @@ def run_ba_filtering_cycle(
 
     residual_for_degenerate = residual_report
     if args.filter_after_ba:
-        filtering_report = f"{stage_prefix}_filtering_report.json"
+        filtering_report = scoped_report_name(args, f"{stage_prefix}_filtering_report.json")
         run_filtering_in_memory(
             args=args,
             runtime=runtime,
@@ -479,7 +510,9 @@ def run_ba_filtering_cycle(
             report_name=filtering_report,
         )
         reports.append({"stage": stage_prefix, "type": "filtering", "report_name": filtering_report})
-        residual_for_degenerate = f"{stage_prefix}_registered_residual_after_filtering_report.json"
+        residual_for_degenerate = scoped_report_name(
+            args, f"{stage_prefix}_registered_residual_after_filtering_report.json"
+        )
         write_registered_residual_report(
             args,
             runtime,
@@ -492,7 +525,7 @@ def run_ba_filtering_cycle(
         )
 
     if args.diagnose_degenerate_cameras or args.remove_degenerate_cameras:
-        degenerate_report = f"{stage_prefix}_degenerate_camera_report.json"
+        degenerate_report = scoped_report_name(args, f"{stage_prefix}_degenerate_camera_report.json")
         argv = [
             "evaluate_degenerate_cameras",
             "--scene",
@@ -527,6 +560,22 @@ def should_run_global_ba(
     image_trigger = current_images >= max(last_global_ba_images + 1, int(np.ceil(last_global_ba_images * growth_ratio)))
     point_trigger = current_points >= max(last_global_ba_points + 1, int(np.ceil(last_global_ba_points * growth_ratio)))
     return image_trigger or point_trigger
+
+
+def sanitize_report_run_id(run_id: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", run_id.strip())
+    cleaned = cleaned.strip("._-")
+    if not cleaned:
+        raise ValueError("--report-run-id must contain at least one filename-safe character")
+    return cleaned
+
+
+def scoped_report_name(args: argparse.Namespace, report_name: str) -> str:
+    name = Path(report_name).name
+    run_id = getattr(args, "report_run_id", "")
+    if not run_id:
+        return name
+    return str(Path(run_id) / name)
 
 
 def report_path_for_scene(scene_path: str, report_name: str) -> str:
@@ -580,7 +629,9 @@ def run_filtering_in_memory(
         "registered_npz_path": str(registered_npz_path),
         **result.report,
     }
-    (runtime.report_dir / report_name).write_text(json.dumps(filtering_report, indent=2), encoding="utf-8")
+    report_path = runtime.report_dir / report_name
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(filtering_report, indent=2), encoding="utf-8")
     return filtering_report
 
 
@@ -598,10 +649,13 @@ def write_registered_residual_report(
         keypoints_by_name=runtime.keypoints_by_name,
     )
     report_path = runtime.report_dir / report_name
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     npz_name = None
     if write_npz:
         npz_name = f"{report_path.stem}_errors.npz"
-        write_residual_npz(runtime.report_dir / npz_name, observations, errors)
+        npz_path = report_path.parent / npz_name
+        npz_path.parent.mkdir(parents=True, exist_ok=True)
+        write_residual_npz(npz_path, observations, errors)
     write_residual_report(
         report_path=report_path,
         scene_name=runtime.config["scene"]["scene_name"],
