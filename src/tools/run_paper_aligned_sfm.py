@@ -26,7 +26,6 @@ from src.sfm.residuals import (
 )
 from src.sfm.runtime import SfMRuntimeContext, load_runtime_context
 from src.tools import evaluate_degenerate_cameras
-from src.tools import filter_reconstruction
 from src.tools import run_bundle_adjustment
 from src.tools import triangulate_registered_tracks
 
@@ -40,8 +39,6 @@ def main() -> int:
     parser.add_argument("--focal-scale", type=float, default=1.2)
     parser.add_argument("--visibility-levels", type=int, default=3)
     parser.add_argument("--top-candidates", type=int, default=5)
-    parser.add_argument("--max-pnp-failures-per-image", type=int, default=3)
-    parser.add_argument("--pnp-failure-cooldown", type=int, default=3)
     parser.add_argument("--local-ba-after-registration", action="store_true")
     parser.add_argument("--local-ba-neighbors", type=int, default=6)
     parser.add_argument("--local-ba-max-iterations", type=int, default=20)
@@ -62,6 +59,7 @@ def main() -> int:
     parser.add_argument("--diagnose-degenerate-cameras", action="store_true")
     parser.add_argument("--remove-degenerate-cameras", action="store_true")
     parser.add_argument("--enable-recursive-track-splitting", action="store_true")
+    parser.add_argument("--use-track-cache", action="store_true")
     parser.add_argument("--run-final-refinement", action="store_true")
     parser.add_argument("--report-name", default="paper_aligned_sfm_report.json")
     args = parser.parse_args()
@@ -82,9 +80,7 @@ def main() -> int:
     initial_registered_images = len(state.registered_images)
     initial_points3d = int(state.points3d.shape[0])
     initial_observations = len(state.observations)
-    failed_attempts: dict[str, int] = {}
-    cooldown_until: dict[str, int] = {}
-    exhausted_images: set[str] = set()
+    failed_images: set[str] = set()
     last_global_ba_images = len(state.registered_images)
     last_global_ba_points = int(state.points3d.shape[0])
     last_global_ba_iteration = 0
@@ -101,10 +97,7 @@ def main() -> int:
             cameras=runtime.cameras,
             min_2d3d=args.min_2d3d,
             visibility_levels=args.visibility_levels,
-            current_iteration=iteration,
-            failed_attempts=failed_attempts,
-            cooldown_until=cooldown_until,
-            exhausted_images=exhausted_images,
+            failed_images=failed_images,
         )
         selected = select_next_image(candidate_diagnostics)
         if selected is None:
@@ -132,10 +125,7 @@ def main() -> int:
             "reports": [],
         }
         if not registration.success:
-            failed_attempts[registration.image_name] = failed_attempts.get(registration.image_name, 0) + 1
-            cooldown_until[registration.image_name] = iteration + max(args.pnp_failure_cooldown, 0)
-            if failed_attempts[registration.image_name] >= args.max_pnp_failures_per_image:
-                exhausted_images.add(registration.image_name)
+            failed_images.add(registration.image_name)
             iterations.append(record)
             continue
 
@@ -207,8 +197,7 @@ def main() -> int:
         "enable_recursive_track_splitting": bool(args.enable_recursive_track_splitting),
         "iterations": iterations,
         "stop_reason": stop_reason,
-        "failed_attempts": dict(sorted(failed_attempts.items())),
-        "exhausted_images": sorted(exhausted_images),
+        "failed_images": sorted(failed_images),
         "final_unregistered_candidates": strip_candidate_payloads(
             collect_unregistered_candidate_diagnostics(
                 images=runtime.image_paths,
@@ -218,10 +207,7 @@ def main() -> int:
                 cameras=runtime.cameras,
                 min_2d3d=args.min_2d3d,
                 visibility_levels=args.visibility_levels,
-                current_iteration=len(iterations) + 1,
-                failed_attempts=failed_attempts,
-                cooldown_until=cooldown_until,
-                exhausted_images=exhausted_images,
+                failed_images=failed_images,
                 limit=max(args.top_candidates, 10),
             ),
             max(args.top_candidates, 10),
@@ -249,10 +235,7 @@ def collect_unregistered_candidate_diagnostics(
     cameras: dict[str, object],
     min_2d3d: int,
     visibility_levels: int,
-    current_iteration: int,
-    failed_attempts: dict[str, int],
-    cooldown_until: dict[str, int],
-    exhausted_images: set[str],
+    failed_images: set[str],
     limit: int | None = None,
 ) -> list[dict]:
     diagnostics = []
@@ -261,10 +244,8 @@ def collect_unregistered_candidate_diagnostics(
         if image_name in state.registered_images:
             continue
         status = "eligible"
-        if image_name in exhausted_images:
-            status = "exhausted"
-        elif current_iteration <= cooldown_until.get(image_name, -1):
-            status = "cooldown"
+        if image_name in failed_images:
+            status = "pnp_failed"
         candidate = collect_candidate_correspondences(
             image_name=image_name,
             state=state,
@@ -292,8 +273,7 @@ def collect_unregistered_candidate_diagnostics(
                 "num_general_edges": score.num_general_edges,
                 "num_planar_edges": score.num_planar_edges,
                 "mean_homography_ratio": score.mean_homography_ratio,
-                "failed_attempts": int(failed_attempts.get(image_name, 0)),
-                "cooldown_until": int(cooldown_until.get(image_name, -1)),
+                "pnp_failed": image_name in failed_images,
                 "_candidate": candidate,
                 "_score": score,
             }
@@ -333,6 +313,8 @@ def run_rt(args: argparse.Namespace, stage_prefix: str, stage: str = "registered
     ]
     if args.enable_recursive_track_splitting:
         argv.extend(["--enable-recursive-track-splitting", "--min-recursive-consensus-size", "3"])
+    if args.use_track_cache:
+        argv.append("--use-track-cache")
     call_tool(triangulate_registered_tracks.main, argv)
     return [{"stage": stage_prefix, "type": "rt", "report_name": report_name}]
 
@@ -390,6 +372,8 @@ def run_rt_with_residual(args: argparse.Namespace, stage_prefix: str, residual_r
     ]
     if args.enable_recursive_track_splitting:
         argv.extend(["--enable-recursive-track-splitting", "--min-recursive-consensus-size", "3"])
+    if args.use_track_cache:
+        argv.append("--use-track-cache")
     call_tool(triangulate_registered_tracks.main, argv)
     return [{"stage": stage_prefix, "type": "post_ba_rt", "report_name": report_name}]
 
@@ -456,25 +440,11 @@ def run_ba_filtering_cycle(
     residual_for_degenerate = residual_report
     if args.filter_after_ba:
         filtering_report = f"{stage_prefix}_filtering_report.json"
-        call_tool(
-            filter_reconstruction.main,
-            [
-                "filter_reconstruction",
-                "--scene",
-                args.scene,
-                "--ba-report",
-                residual_report_path,
-                "--max-reprojection-error",
-                str(args.filter_max_reprojection_error),
-                "--max-point-median-error",
-                str(args.filter_max_point_median_error),
-                "--max-point-max-error",
-                str(args.filter_max_point_max_error),
-                "--min-track-length",
-                str(args.filter_min_track_length),
-                "--report-name",
-                filtering_report,
-            ],
+        run_filtering_in_memory(
+            args=args,
+            runtime=runtime,
+            residual_report_path=residual_report_path,
+            report_name=filtering_report,
         )
         reports.append({"stage": stage_prefix, "type": "filtering", "report_name": filtering_report})
         residual_for_degenerate = f"{stage_prefix}_registered_residual_after_filtering_report.json"
@@ -531,6 +501,55 @@ def report_path_for_scene(scene_path: str, report_name: str) -> str:
     config = load_scene_config(scene_path)
     report_dir = resolve_project_path(config["scene"]["output_dir"]) / "reports"
     return str(report_dir / report_name)
+
+
+def run_filtering_in_memory(
+    args: argparse.Namespace,
+    runtime: SfMRuntimeContext,
+    residual_report_path: str,
+    report_name: str,
+) -> dict:
+    report = json.loads(Path(residual_report_path).read_text(encoding="utf-8"))
+    if "observation_errors_npz" not in report:
+        raise ValueError(f"Residual report does not reference NPZ errors: {residual_report_path}")
+    npz_path = Path(str(report["observation_errors_npz"]))
+    if not npz_path.is_absolute():
+        npz_path = Path(residual_report_path).parent / npz_path
+    data = np.load(npz_path)
+    observations = [
+        {
+            "point3D_id": int(point_id),
+            "image_name": str(image_name),
+            "keypoint_idx": int(keypoint_idx),
+        }
+        for point_id, image_name, keypoint_idx in zip(
+            data["point3D_ids"],
+            data["image_names"],
+            data["keypoint_indices"],
+        )
+    ]
+    errors = data["reprojection_errors"].astype(np.float64)
+    state = load_reconstruction_state(runtime.sparse_dir)
+    result = filter_reconstruction_by_ba_errors(
+        state=state,
+        ba_observations=observations,
+        ba_errors=errors,
+        max_observation_error=args.filter_max_reprojection_error,
+        max_point_median_error=args.filter_max_point_median_error,
+        max_point_max_error=args.filter_max_point_max_error,
+        min_track_length=args.filter_min_track_length,
+    )
+    state_path, registered_npz_path = save_reconstruction_state(result.filtered_state, runtime.sparse_dir)
+    filtering_report = {
+        "scene_name": runtime.config["scene"]["scene_name"],
+        "dry_run": False,
+        "ba_report_path": residual_report_path,
+        "state_path": str(state_path),
+        "registered_npz_path": str(registered_npz_path),
+        **result.report,
+    }
+    (runtime.report_dir / report_name).write_text(json.dumps(filtering_report, indent=2), encoding="utf-8")
+    return filtering_report
 
 
 def write_registered_residual_report(

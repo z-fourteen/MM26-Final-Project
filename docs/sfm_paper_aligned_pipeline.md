@@ -124,7 +124,7 @@ Observation and point filtering are currently implemented in:
 
 ```text
 src/sfm/filtering.py
-src/tools/filter_reconstruction.py
+src/tools/run_paper_aligned_sfm.py
 ```
 
 Degenerate camera diagnostics are currently implemented in:
@@ -159,7 +159,7 @@ initialize_reconstruction.py
 run_paper_aligned_sfm.py
 triangulate_registered_tracks.py with current RT policy
 run_bundle_adjustment.py with local/global scopes
-filter_reconstruction.py
+src/sfm/filtering.py through run_paper_aligned_sfm.py
 evaluate_registered_residuals.py
 evaluate_degenerate_cameras.py as diagnostics
 ```
@@ -168,7 +168,6 @@ Experimental:
 
 ```text
 post_ba_moderate / post_ba_strict RT policies
-run_ba_rt_refinement.py automatic policy controller
 balanced capped observation sampling in SciPy BA
 recursive track splitting diagnostics
 camera removal without manual inspection
@@ -214,3 +213,22 @@ Use `--remove-degenerate-cameras` only after inspecting diagnostic reports.
 The `--global-ba-min-interval` option prevents small early reconstructions from
 running global refinement after every newly registered image. Local BA remains the
 high-frequency stabilizer; global refinement is reserved for larger model growth.
+
+## 7. Matching and Export Notes
+
+The RootSIFT NPZ pipeline supports exhaustive and sequential pair generation through
+`src.tools.match_features`. The `vocabulary_tree` strategy is exposed through
+pycolmap and therefore expects a COLMAP database plus a vocabulary tree file:
+
+```bash
+python -m src.tools.match_features --scene configs/scenes/<scene>.yaml \
+  --strategy vocabulary_tree \
+  --database-path path/to/database.db \
+  --vocab-tree-path path/to/vocab_tree.bin
+```
+
+For 3DGS handoff, export the current reconstruction as a COLMAP text sparse model:
+
+```bash
+python -m src.tools.export_colmap_model --scene configs/scenes/<scene>.yaml
+```

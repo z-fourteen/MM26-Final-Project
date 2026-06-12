@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -19,24 +18,14 @@ from src.sfm.reconstruction import (
     observation_lookup,
     save_reconstruction_state,
 )
+from src.sfm.track_cache import (
+    TrackBuildResult,
+    TrackObservation,
+    load_track_cache,
+    save_track_cache,
+    track_cache_path,
+)
 from src.sfm.triangulation import robust_triangulate_track, robust_triangulate_track_recursive
-
-
-@dataclass(frozen=True)
-class TrackObservation:
-    image_name: str
-    keypoint_idx: int
-
-
-@dataclass(frozen=True)
-class TrackBuildResult:
-    tracks: list[list[TrackObservation]]
-    valid_edges: set[tuple[str, str]]
-    edge_status_counts: dict[str, int]
-    edge_model_type_counts: dict[str, int]
-    used_edges: int
-    skipped_edges: int
-    skipped_matches_by_residual: int
 
 
 class UnionFind:
@@ -409,6 +398,8 @@ def main() -> int:
     parser.add_argument("--max-new-point-median-error", type=float, default=0.0)
     parser.add_argument("--max-new-point-max-error", type=float, default=0.0)
     parser.add_argument("--dry-run", action="store_true", help="Write report only without changing reconstruction state.")
+    parser.add_argument("--use-track-cache", action="store_true")
+    parser.add_argument("--rebuild-track-cache", action="store_true")
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -458,11 +449,21 @@ def main() -> int:
     elif args.stage == "post_ba_rt":
         raise ValueError("post_ba_rt requires --residual-report for observation gating.")
 
-    track_build = build_registered_tracks(
-        verified_dir,
-        registered_names,
-        blocked_observations=blocked_observations,
-    )
+    cache_dir = sparse_dir / "track_cache"
+    cache_path = track_cache_path(cache_dir, registered_names)
+    track_cache_hit = False
+    track_build = None
+    if args.use_track_cache and not args.rebuild_track_cache and not blocked_observations:
+        track_build = load_track_cache(cache_path, registered_names)
+        track_cache_hit = track_build is not None
+    if track_build is None:
+        track_build = build_registered_tracks(
+            verified_dir,
+            registered_names,
+            blocked_observations=blocked_observations,
+        )
+        if args.use_track_cache and not blocked_observations:
+            save_track_cache(cache_path, track_build, registered_names)
     tracks = track_build.tracks
     existing = observation_lookup(state)
 
@@ -639,6 +640,9 @@ def main() -> int:
         "edge_status_counts": track_build.edge_status_counts,
         "edge_model_type_counts": track_build.edge_model_type_counts,
         "input_tracks": len(tracks),
+        "track_cache_enabled": bool(args.use_track_cache),
+        "track_cache_hit": bool(track_cache_hit),
+        "track_cache_path": str(cache_path),
         "initial_points3D": initial_points,
         "final_points3D": int(state.points3d.shape[0]),
         "new_points3D": int(state.points3d.shape[0] - initial_points),

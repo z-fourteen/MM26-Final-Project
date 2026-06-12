@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pycolmap
 from tqdm import tqdm
 
 from src.sfm.config import load_scene_config, resolve_project_path
@@ -22,7 +23,11 @@ from src.sfm.matching import (
 def main() -> int:
     parser = argparse.ArgumentParser(description="Match RootSIFT features for a configured scene.")
     parser.add_argument("--scene", required=True, help="Path to configs/scenes/<scene>.yaml")
-    parser.add_argument("--strategy", default="exhaustive", choices=["exhaustive"])
+    parser.add_argument("--strategy", default="exhaustive", choices=["exhaustive", "sequential", "vocabulary_tree"])
+    parser.add_argument("--sequential-window", type=int, default=10)
+    parser.add_argument("--database-path", default="", help="COLMAP database path for vocabulary_tree matching.")
+    parser.add_argument("--vocab-tree-path", default="", help="COLMAP vocabulary tree path.")
+    parser.add_argument("--vocab-tree-num-images", type=int, default=50)
     parser.add_argument("--max-pairs", type=int, default=0, help="Optional cap for debugging; 0 means all pairs.")
     parser.add_argument("--preview-count", type=int, default=3)
     parser.add_argument("--force", action="store_true", help="Recompute existing match files.")
@@ -47,6 +52,8 @@ def main() -> int:
     images = list_images(image_dir)
     if len(images) < 2:
         raise ValueError(f"Need at least two images for matching: {image_dir}")
+    if args.strategy == "vocabulary_tree":
+        return run_vocab_tree_matching(args, scene)
 
     feature_paths = [feature_dir / f"{image_path.stem}.npz" for image_path in images]
     missing_features = [str(path) for path in feature_paths if not path.exists()]
@@ -56,7 +63,7 @@ def main() -> int:
     features = [load_features(path) for path in feature_paths]
     image_by_name = {image_path.name: image_path for image_path in images}
     feature_by_name = {feature.image_name: feature for feature in features}
-    pairs = list(itertools.combinations(range(len(features)), 2))
+    pairs = build_pair_indices(len(features), strategy=args.strategy, sequential_window=args.sequential_window)
     if args.max_pairs > 0:
         pairs = pairs[: args.max_pairs]
 
@@ -107,6 +114,7 @@ def main() -> int:
     report = {
         "scene_name": scene["scene_name"],
         "strategy": args.strategy,
+        "sequential_window": args.sequential_window,
         "num_images": len(images),
         "num_pairs": len(pairs),
         "ratio_test": ratio_test,
@@ -127,6 +135,37 @@ def main() -> int:
     print(f"Matches min/mean/max: {report['min_matches']} / {report['mean_matches']:.1f} / {report['max_matches']}")
     print(f"Pairs >= {min_num_matches}: {report['num_pairs_ge_min_matches']}")
     print(f"Report: {report_path}")
+    return 0
+
+
+def build_pair_indices(num_images: int, strategy: str, sequential_window: int) -> list[tuple[int, int]]:
+    if strategy == "exhaustive":
+        return list(itertools.combinations(range(num_images), 2))
+    if strategy == "sequential":
+        window = max(int(sequential_window), 1)
+        return [
+            (idx1, idx2)
+            for idx1 in range(num_images)
+            for idx2 in range(idx1 + 1, min(num_images, idx1 + window + 1))
+        ]
+    raise ValueError(f"Unsupported NPZ matching strategy: {strategy}")
+
+
+def run_vocab_tree_matching(args: argparse.Namespace, scene: dict) -> int:
+    if not args.database_path:
+        raise ValueError("--database-path is required for --strategy vocabulary_tree")
+    if not args.vocab_tree_path:
+        raise ValueError("--vocab-tree-path is required for --strategy vocabulary_tree")
+    pairing_options = pycolmap.VocabTreePairingOptions()
+    if hasattr(pairing_options, "vocab_tree_path"):
+        pairing_options.vocab_tree_path = args.vocab_tree_path
+    if hasattr(pairing_options, "num_images"):
+        pairing_options.num_images = int(args.vocab_tree_num_images)
+    pycolmap.match_vocabtree(args.database_path, pairing_options=pairing_options)
+    print(f"Scene: {scene['scene_name']}")
+    print("Strategy: vocabulary_tree")
+    print(f"Database: {args.database_path}")
+    print(f"Vocab tree: {args.vocab_tree_path}")
     return 0
 
 
