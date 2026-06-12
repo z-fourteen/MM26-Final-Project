@@ -40,6 +40,8 @@ def main() -> int:
     parser.add_argument("--focal-scale", type=float, default=1.2)
     parser.add_argument("--visibility-levels", type=int, default=3)
     parser.add_argument("--top-candidates", type=int, default=5)
+    parser.add_argument("--max-pnp-failures-per-image", type=int, default=3)
+    parser.add_argument("--pnp-failure-cooldown", type=int, default=3)
     parser.add_argument("--local-ba-after-registration", action="store_true")
     parser.add_argument("--local-ba-neighbors", type=int, default=6)
     parser.add_argument("--local-ba-max-iterations", type=int, default=20)
@@ -80,25 +82,33 @@ def main() -> int:
     initial_registered_images = len(state.registered_images)
     initial_points3d = int(state.points3d.shape[0])
     initial_observations = len(state.observations)
-    failed_images: set[str] = set()
+    failed_attempts: dict[str, int] = {}
+    cooldown_until: dict[str, int] = {}
+    exhausted_images: set[str] = set()
     last_global_ba_images = len(state.registered_images)
     last_global_ba_points = int(state.points3d.shape[0])
     last_global_ba_iteration = 0
     iterations = []
+    stop_reason = "max_register_reached"
 
     for iteration in range(1, args.max_register + 1):
         state = load_reconstruction_state(sparse_dir)
-        selected = select_next_image(
+        candidate_diagnostics = collect_unregistered_candidate_diagnostics(
             images=runtime.image_paths,
             state=state,
             verified_dir=runtime.verified_dir,
             keypoints_by_name=runtime.keypoints_by_name,
             cameras=runtime.cameras,
-            failed_images=failed_images,
             min_2d3d=args.min_2d3d,
             visibility_levels=args.visibility_levels,
+            current_iteration=iteration,
+            failed_attempts=failed_attempts,
+            cooldown_until=cooldown_until,
+            exhausted_images=exhausted_images,
         )
+        selected = select_next_image(candidate_diagnostics)
         if selected is None:
+            stop_reason = "no_eligible_candidate"
             break
         candidate, score = selected
         registration = register_image_pnp(
@@ -118,10 +128,14 @@ def main() -> int:
             "mean_reprojection_error": registration.mean_reprojection_error,
             "pyramid_visibility_score": score.pyramid_score,
             "registered_neighbor_count": score.registered_neighbor_count,
+            "top_unregistered_candidates": strip_candidate_payloads(candidate_diagnostics, args.top_candidates),
             "reports": [],
         }
         if not registration.success:
-            failed_images.add(registration.image_name)
+            failed_attempts[registration.image_name] = failed_attempts.get(registration.image_name, 0) + 1
+            cooldown_until[registration.image_name] = iteration + max(args.pnp_failure_cooldown, 0)
+            if failed_attempts[registration.image_name] >= args.max_pnp_failures_per_image:
+                exhausted_images.add(registration.image_name)
             iterations.append(record)
             continue
 
@@ -165,6 +179,8 @@ def main() -> int:
             last_global_ba_iteration = iteration
 
         iterations.append(record)
+    else:
+        stop_reason = "max_register_reached"
 
     final_reports = []
     if args.run_final_refinement:
@@ -190,6 +206,26 @@ def main() -> int:
         "remove_degenerate_cameras": bool(args.remove_degenerate_cameras),
         "enable_recursive_track_splitting": bool(args.enable_recursive_track_splitting),
         "iterations": iterations,
+        "stop_reason": stop_reason,
+        "failed_attempts": dict(sorted(failed_attempts.items())),
+        "exhausted_images": sorted(exhausted_images),
+        "final_unregistered_candidates": strip_candidate_payloads(
+            collect_unregistered_candidate_diagnostics(
+                images=runtime.image_paths,
+                state=final_state,
+                verified_dir=runtime.verified_dir,
+                keypoints_by_name=runtime.keypoints_by_name,
+                cameras=runtime.cameras,
+                min_2d3d=args.min_2d3d,
+                visibility_levels=args.visibility_levels,
+                current_iteration=len(iterations) + 1,
+                failed_attempts=failed_attempts,
+                cooldown_until=cooldown_until,
+                exhausted_images=exhausted_images,
+                limit=max(args.top_candidates, 10),
+            ),
+            max(args.top_candidates, 10),
+        ),
         "final_refinement_reports": final_reports,
         "final_residual_report": final_residual_report,
     }
@@ -205,29 +241,39 @@ def main() -> int:
     return 0
 
 
-def select_next_image(
+def collect_unregistered_candidate_diagnostics(
     images: list[Path],
     state,
     verified_dir: Path,
     keypoints_by_name: dict[str, np.ndarray],
     cameras: dict[str, object],
-    failed_images: set[str],
     min_2d3d: int,
     visibility_levels: int,
-) -> tuple[Candidate2D3D, NextBestViewScore] | None:
-    scored = []
+    current_iteration: int,
+    failed_attempts: dict[str, int],
+    cooldown_until: dict[str, int],
+    exhausted_images: set[str],
+    limit: int | None = None,
+) -> list[dict]:
+    diagnostics = []
     for image_path in images:
         image_name = image_path.name
-        if image_name in state.registered_images or image_name in failed_images:
+        if image_name in state.registered_images:
             continue
+        status = "eligible"
+        if image_name in exhausted_images:
+            status = "exhausted"
+        elif current_iteration <= cooldown_until.get(image_name, -1):
+            status = "cooldown"
         candidate = collect_candidate_correspondences(
             image_name=image_name,
             state=state,
             verified_dir=verified_dir,
             keypoints_by_name=keypoints_by_name,
         )
-        if candidate.num_correspondences < min_2d3d:
-            continue
+        eligible_2d3d = candidate.num_correspondences >= min_2d3d
+        if not eligible_2d3d and status == "eligible":
+            status = "not_enough_2d3d"
         score = score_next_best_view(
             candidate=candidate,
             camera=cameras[image_name],
@@ -235,11 +281,43 @@ def select_next_image(
             registered_image_names=set(state.registered_images),
             levels=visibility_levels,
         )
-        scored.append((candidate, score))
-    if not scored:
-        return None
-    scored.sort(key=lambda item: (item[1].pyramid_score, item[1].num_2d3d), reverse=True)
-    return scored[0]
+        diagnostics.append(
+            {
+                "image_name": image_name,
+                "status": status,
+                "eligible": status == "eligible" and eligible_2d3d,
+                "num_2d3d": candidate.num_correspondences,
+                "pyramid_visibility_score": score.pyramid_score,
+                "registered_neighbor_count": score.registered_neighbor_count,
+                "num_general_edges": score.num_general_edges,
+                "num_planar_edges": score.num_planar_edges,
+                "mean_homography_ratio": score.mean_homography_ratio,
+                "failed_attempts": int(failed_attempts.get(image_name, 0)),
+                "cooldown_until": int(cooldown_until.get(image_name, -1)),
+                "_candidate": candidate,
+                "_score": score,
+            }
+        )
+    diagnostics.sort(key=lambda item: (item["eligible"], item["pyramid_visibility_score"], item["num_2d3d"]), reverse=True)
+    if limit is not None:
+        diagnostics = diagnostics[:limit]
+    return diagnostics
+
+
+def select_next_image(candidate_diagnostics: list[dict]) -> tuple[Candidate2D3D, NextBestViewScore] | None:
+    for item in candidate_diagnostics:
+        if not item["eligible"]:
+            continue
+        return item["_candidate"], item["_score"]
+    return None
+
+
+def strip_candidate_payloads(candidate_diagnostics: list[dict], limit: int) -> list[dict]:
+    stripped = []
+    for item in candidate_diagnostics[:limit]:
+        clean = {key: value for key, value in item.items() if not key.startswith("_")}
+        stripped.append(clean)
+    return stripped
 
 
 def run_rt(args: argparse.Namespace, stage_prefix: str, stage: str = "registered_rt") -> list[dict]:
