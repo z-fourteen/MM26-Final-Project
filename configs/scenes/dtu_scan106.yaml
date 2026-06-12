@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan106
+dataset_name: DTU/scan106
+image_dir: data/scenes/dtu_scan106/images
+feature_dir: data/scenes/dtu_scan106/features
+match_dir: data/scenes/dtu_scan106/matches
+verified_dir: data/scenes/dtu_scan106/verified
+track_dir: data/scenes/dtu_scan106/tracks
+sparse_dir: data/scenes/dtu_scan106/sparse/0
+undistorted_dir: data/scenes/dtu_scan106/undistorted
+output_dir: outputs/dtu_scan106
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan106/images
+  num_images: 64

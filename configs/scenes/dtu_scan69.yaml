@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan69
+dataset_name: DTU/scan69
+image_dir: data/scenes/dtu_scan69/images
+feature_dir: data/scenes/dtu_scan69/features
+match_dir: data/scenes/dtu_scan69/matches
+verified_dir: data/scenes/dtu_scan69/verified
+track_dir: data/scenes/dtu_scan69/tracks
+sparse_dir: data/scenes/dtu_scan69/sparse/0
+undistorted_dir: data/scenes/dtu_scan69/undistorted
+output_dir: outputs/dtu_scan69
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan69/images
+  num_images: 49

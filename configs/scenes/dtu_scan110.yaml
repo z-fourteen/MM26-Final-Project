@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan110
+dataset_name: DTU/scan110
+image_dir: data/scenes/dtu_scan110/images
+feature_dir: data/scenes/dtu_scan110/features
+match_dir: data/scenes/dtu_scan110/matches
+verified_dir: data/scenes/dtu_scan110/verified
+track_dir: data/scenes/dtu_scan110/tracks
+sparse_dir: data/scenes/dtu_scan110/sparse/0
+undistorted_dir: data/scenes/dtu_scan110/undistorted
+output_dir: outputs/dtu_scan110
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan110/images
+  num_images: 64

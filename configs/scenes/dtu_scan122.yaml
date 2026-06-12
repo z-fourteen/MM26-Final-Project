@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan122
+dataset_name: DTU/scan122
+image_dir: data/scenes/dtu_scan122/images
+feature_dir: data/scenes/dtu_scan122/features
+match_dir: data/scenes/dtu_scan122/matches
+verified_dir: data/scenes/dtu_scan122/verified
+track_dir: data/scenes/dtu_scan122/tracks
+sparse_dir: data/scenes/dtu_scan122/sparse/0
+undistorted_dir: data/scenes/dtu_scan122/undistorted
+output_dir: outputs/dtu_scan122
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan122/images
+  num_images: 64

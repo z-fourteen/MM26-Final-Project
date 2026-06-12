@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan40
+dataset_name: DTU/scan40
+image_dir: data/scenes/dtu_scan40/images
+feature_dir: data/scenes/dtu_scan40/features
+match_dir: data/scenes/dtu_scan40/matches
+verified_dir: data/scenes/dtu_scan40/verified
+track_dir: data/scenes/dtu_scan40/tracks
+sparse_dir: data/scenes/dtu_scan40/sparse/0
+undistorted_dir: data/scenes/dtu_scan40/undistorted
+output_dir: outputs/dtu_scan40
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan40/images
+  num_images: 49
