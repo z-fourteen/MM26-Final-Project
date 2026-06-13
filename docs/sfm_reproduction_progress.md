@@ -68,7 +68,7 @@ Phase 9  Interface to 3DGS
 - `configs/default.yaml`
 - `configs/scenes/*.yaml`
 - `src/tools/check_env.py`
-- `docs/dataset_download.md`
+- `docs/artifacts_manifest.md`
 
 ### 2.3 环境检查命令
 

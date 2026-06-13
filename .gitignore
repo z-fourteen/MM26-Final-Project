@@ -1,7 +1,4 @@
-﻿# 蹇界暐鏁版嵁闆嗗拰璁粌杈撳嚭妯″瀷
-
-# 蹇界暐 Python 缂撳瓨鍜屾湰鍦颁复鏃舵枃浠?
-__pycache__/
+﻿__pycache__/
 *.pyc
 .ipynb_checkpoints/
 *.ply

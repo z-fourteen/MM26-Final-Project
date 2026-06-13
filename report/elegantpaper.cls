@@ -201,34 +201,34 @@
 
 \ifdefstring{\ELEGANT@lang}{cn}{
   \theoremstyle{plain}% default
-  \newtheorem{theorem}{瀹氱悊}[section] %
-  \newtheorem{lemma}[theorem]{寮曠悊} %
-  \newtheorem{proposition}[theorem]{鍛介} %
-  \newtheorem*{corollary}{鎺ㄨ} %
+  \newtheorem{theorem}{定理}[section] %
+  \newtheorem{lemma}[theorem]{引理} %
+  \newtheorem{proposition}[theorem]{命题} %
+  \newtheorem*{corollary}{推论} %
   \theoremstyle{definition} %
-  \newtheorem{definition}{瀹氫箟}[section] %
-  \newtheorem{conjecture}{鐚滄兂}[section] %
-  \newtheorem{example}{渚媫[section] %
+  \newtheorem{definition}{定义}[section] %
+  \newtheorem{conjecture}{猜想}[section] %
+  \newtheorem{example}{例}[section] %
   \theoremstyle{remark} %
-  \newtheorem*{remark}{\normalfont\bfseries 璇勮} %
-  \newtheorem*{note}{\normalfont\bfseries 娉▆ %
-  \newtheorem{case}{\normalfont\bfseries 妗堜緥} %
-  \renewcommand*{\proofname}{\normalfont\bfseries 璇佹槑} %
-  \renewcommand\contentsname{鐩綍}
-  \renewcommand\refname{鍙傝€冩枃鐚畗 %
-  \renewcommand\figurename{鍥緘 %
-  \renewcommand\tablename{琛▆%
-  \newcommand\versiontext{鐗堟湰锛殅%
-  \newcommand\updatetext{鏃ユ湡锛殅%
-  \newcommand{\ebibname}{鍙傝€冩枃鐚畗
-  \renewcommand\abstractname{鎽榎hspace{2em}瑕亇
+  \newtheorem*{remark}{\normalfont\bfseries 评论} %
+  \newtheorem*{note}{\normalfont\bfseries 注} %
+  \newtheorem{case}{\normalfont\bfseries 案例} %
+  \renewcommand*{\proofname}{\normalfont\bfseries 证明} %
+  \renewcommand\contentsname{目录}
+  \renewcommand\refname{参考文献}%
+  \renewcommand\figurename{图}%
+  \renewcommand\tablename{表}%
+  \newcommand\versiontext{版本：}%
+  \newcommand\updatetext{日期：}%
+  \newcommand{\ebibname}{参考文献}
+  \renewcommand\abstractname{摘\hspace{2em}要}
   \setlength\parindent{2\ccwd}
   \renewcommand{\abstracttextfont}{\small\citshape\noindent\ignorespaces}
-  % 鏂板畾涔夊懡浠?  \newcommand{\keywords}[1]{\vskip2ex\par\noindent\normalfont{\bfseries 鍏抽敭璇? } #1}
-  \newcommand\figref[1]{{\bfseries 鍥緙\ref{#1}}}
-  \newcommand\tabref[1]{{\bfseries 琛▇\ref{#1}}}
-  \renewcommand{\appendixtocname}{闄勫綍}
-  \renewcommand{\appendixpagename}{闄勫綍}}{\relax}
+  \newcommand{\keywords}[1]{\vskip2ex\par\noindent\normalfont{\bfseries 关键词：} #1}
+  \newcommand\figref[1]{{\bfseries 图~\ref{#1}}}
+  \newcommand\tabref[1]{{\bfseries 表~\ref{#1}}}
+  \renewcommand{\appendixtocname}{附录}
+  \renewcommand{\appendixpagename}{附录}}{\relax}
 
 \ifdefstring{\ELEGANT@lang}{en}{
   \theoremstyle{plain}% default

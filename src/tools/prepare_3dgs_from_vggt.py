@@ -38,10 +38,10 @@ def main() -> int:
     sparse_dir = output_dir / "sparse" / "0"
     sparse_dir.mkdir(parents=True, exist_ok=True)
 
-    source_image_dir = resolve_project_path(scene["image_dir"])
-    image_paths = list_images(source_image_dir)
     predictions = np.load(resolve_project_path(args.predictions))
     points = np.load(resolve_project_path(args.points))
+    source_image_dir = resolve_project_path(scene["image_dir"])
+    image_paths = list_prediction_images(predictions, source_image_dir)
     extrinsics = np.asarray(predictions["extrinsic"], dtype=np.float64)
     intrinsics = np.asarray(predictions["intrinsic"], dtype=np.float64)
     if len(image_paths) != len(extrinsics):
@@ -87,6 +87,29 @@ def list_images(image_dir: Path) -> list[Path]:
     if not paths:
         raise ValueError(f"No images found in {image_dir}")
     return paths
+
+
+def list_prediction_images(predictions, fallback_image_dir: Path) -> list[Path]:
+    if "image_paths" not in predictions:
+        return list_images(fallback_image_dir)
+    paths = [Path(str(path)) for path in predictions["image_paths"].tolist()]
+    resolved = []
+    for path in paths:
+        if path.is_absolute() and path.exists():
+            resolved.append(path)
+            continue
+        fallback = fallback_image_dir / path.name
+        if fallback.exists():
+            resolved.append(fallback)
+            continue
+        candidate = resolve_project_path(path)
+        if candidate.exists():
+            resolved.append(candidate)
+            continue
+        raise FileNotFoundError(f"VGGT prediction image does not exist: {path}")
+    if not resolved:
+        raise ValueError("VGGT predictions contain no image paths")
+    return resolved
 
 
 def save_preprocessed_images(image_paths: list[Path], output_dir: Path, mode: str) -> tuple[list[str], int, int]:
