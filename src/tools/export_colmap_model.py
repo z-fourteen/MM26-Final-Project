@@ -95,10 +95,7 @@ def write_cameras(path: Path, camera_records: dict[int, tuple[int, int, float, f
         f"# Number of cameras: {len(camera_records)}",
     ]
     for camera_id, (width, height, fx, fy, cx, cy) in sorted(camera_records.items()):
-        if abs(float(fx) - float(fy)) < 1e-6:
-            lines.append(f"{camera_id} SIMPLE_PINHOLE {width} {height} {fx:.12g} {cx:.12g} {cy:.12g}")
-        else:
-            lines.append(f"{camera_id} PINHOLE {width} {height} {fx:.12g} {fy:.12g} {cx:.12g} {cy:.12g}")
+        lines.append(f"{camera_id} PINHOLE {width} {height} {fx:.12g} {fy:.12g} {cx:.12g} {cy:.12g}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
