@@ -5,6 +5,8 @@ param(
     [int]$MaxRegister = 70,
     [double]$GlobalBaGrowthRatio = 1.3,
     [int]$GlobalBaMinInterval = 4,
+    [int]$DegenerateMinObservations = 20,
+    [switch]$RemoveDegenerateCameras,
     [string]$ReportName = ""
 )
 
@@ -29,20 +31,36 @@ if (-not (Test-Path $ImageDir)) {
     throw "Image directory not found: $ImageDir"
 }
 
+$RemoveDegenerateArgs = @()
+if ($RemoveDegenerateCameras) {
+    $RemoveDegenerateArgs = @("--remove-degenerate-cameras")
+}
+
+function Invoke-PythonStep {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+    python @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python step failed with exit code ${LASTEXITCODE}: python $($Arguments -join ' ')"
+    }
+}
+
 Write-Host "Running full SfM pipeline for scene: $Scene" -ForegroundColor Cyan
 Write-Host "Scene config: $SceneConfig"
 
-python -m src.tools.extract_features --scene $SceneConfig
+Invoke-PythonStep -m src.tools.extract_features --scene $SceneConfig
 
-python -m src.tools.match_features `
+Invoke-PythonStep -m src.tools.match_features `
     --scene $SceneConfig `
     --strategy exhaustive
 
-python -m src.tools.verify_matches --scene $SceneConfig
+Invoke-PythonStep -m src.tools.verify_matches --scene $SceneConfig
 
-python -m src.tools.initialize_reconstruction --scene $SceneConfig
+Invoke-PythonStep -m src.tools.initialize_reconstruction --scene $SceneConfig
 
-python -m src.tools.run_paper_aligned_sfm `
+Invoke-PythonStep -m src.tools.run_paper_aligned_sfm `
     --scene $SceneConfig `
     --max-register $MaxRegister `
     --strict-pnp-median-error 4.0 `
@@ -57,14 +75,16 @@ python -m src.tools.run_paper_aligned_sfm `
     --global-ba-max-points 0 `
     --global-ba-max-observations 0 `
     --diagnose-degenerate-cameras `
-    --report-name $ReportName
+    --degenerate-min-observations $DegenerateMinObservations `
+    --report-name $ReportName `
+    $RemoveDegenerateArgs
 
-python -m src.tools.prepare_3dgs_from_sfm `
+Invoke-PythonStep -m src.tools.prepare_3dgs_from_sfm `
     --scene $SceneConfig `
     --output-root $GsInputRoot `
     --output-name $GsInputName
 
-python -m src.tools.check_3dgs_scene `
+Invoke-PythonStep -m src.tools.check_3dgs_scene `
     --source-path $GsInputPath `
     --write-ply `
     --report-name $CheckReport

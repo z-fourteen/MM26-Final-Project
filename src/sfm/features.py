@@ -17,6 +17,8 @@ class FeatureExtractionResult:
     resized_size: tuple[int, int]
     scale_factor: float
     num_keypoints: int
+    used_alpha_mask: bool
+    mask_coverage: float
     output_path: Path
 
 
@@ -33,6 +35,21 @@ def read_image_gray(image_path: Path) -> np.ndarray:
     if image is None:
         raise ValueError(f"Failed to read image: {image_path}")
     return image
+
+
+def read_image_gray_and_alpha_mask(image_path: Path, alpha_threshold: int = 1) -> tuple[np.ndarray, np.ndarray | None, bool]:
+    image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise ValueError(f"Failed to read image: {image_path}")
+    if image.ndim == 2:
+        return image, None, False
+    if image.shape[2] == 4:
+        gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_BGR2GRAY)
+        alpha = image[:, :, 3]
+        mask = np.where(alpha >= int(alpha_threshold), 255, 0).astype(np.uint8)
+        return gray, mask, True
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return gray, None, False
 
 
 def resize_for_sfm(image: np.ndarray, max_image_size: int) -> tuple[np.ndarray, float]:
@@ -76,14 +93,26 @@ def extract_rootsift(
     feature_dir: Path,
     max_image_size: int = 1600,
     nfeatures: int = 8192,
+    use_alpha_mask: bool = True,
+    alpha_threshold: int = 1,
 ) -> FeatureExtractionResult:
-    image = read_image_gray(image_path)
+    if use_alpha_mask:
+        image, mask, has_alpha = read_image_gray_and_alpha_mask(image_path, alpha_threshold=alpha_threshold)
+    else:
+        image = read_image_gray(image_path)
+        mask = None
+        has_alpha = False
     original_height, original_width = image.shape[:2]
     resized, scale = resize_for_sfm(image, max_image_size=max_image_size)
+    resized_mask = None
+    if mask is not None:
+        resized_mask, _mask_scale = resize_for_sfm(mask, max_image_size=max_image_size)
+        resized_mask = np.where(resized_mask >= 128, 255, 0).astype(np.uint8)
     resized_height, resized_width = resized.shape[:2]
+    mask_coverage = float(np.mean(resized_mask > 0)) if resized_mask is not None else 1.0
 
     sift = cv2.SIFT_create(nfeatures=nfeatures)
-    keypoints, descriptors = sift.detectAndCompute(resized, None)
+    keypoints, descriptors = sift.detectAndCompute(resized, resized_mask)
     descriptors = rootsift(descriptors)
     inv_scale = 1.0 / scale
     keypoint_array = keypoints_to_array(keypoints, inv_scale=inv_scale)
@@ -98,6 +127,9 @@ def extract_rootsift(
         scale_factor=np.float32(scale),
         keypoints=keypoint_array,
         descriptors=descriptors,
+        used_alpha_mask=np.bool_(has_alpha and use_alpha_mask),
+        alpha_threshold=np.int32(alpha_threshold),
+        mask_coverage=np.float32(mask_coverage),
     )
 
     return FeatureExtractionResult(
@@ -106,6 +138,8 @@ def extract_rootsift(
         resized_size=(resized_width, resized_height),
         scale_factor=scale,
         num_keypoints=len(keypoint_array),
+        used_alpha_mask=bool(has_alpha and use_alpha_mask),
+        mask_coverage=mask_coverage,
         output_path=output_path,
     )
 

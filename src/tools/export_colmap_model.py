@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,16 @@ def main() -> int:
     parser.add_argument("--scene", required=True, help="Path to configs/scenes/<scene>.yaml")
     parser.add_argument("--output-dir", default="", help="Defaults to outputs/<scene>/colmap/sparse/0")
     parser.add_argument("--focal-scale", type=float, default=1.2)
+    parser.add_argument(
+        "--filter-points-robust-bbox",
+        action="store_true",
+        help="Export only points inside a robust coordinate bounding box.",
+    )
+    parser.add_argument("--point-bbox-lower-percentile", type=float, default=1.0)
+    parser.add_argument("--point-bbox-upper-percentile", type=float, default=99.0)
+    parser.add_argument("--point-bbox-padding-ratio", type=float, default=0.1)
+    parser.add_argument("--point-bbox-min-points", type=int, default=100)
+    parser.add_argument("--point-filter-report", default="", help="Optional JSON report for exported point filtering.")
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -67,8 +78,26 @@ def main() -> int:
         if point_id < 0 or point_id >= int(state.points3d.shape[0]):
             continue
         keypoint_idx = int(observation["keypoint_idx"])
-        observations_by_image.setdefault(image_name, []).append(observation)
         point_tracks.setdefault(point_id, []).append((image_name, image_id_by_name[image_name], keypoint_idx))
+
+    point_tracks, point_filter_report = filter_point_tracks_for_export(
+        state=state,
+        point_tracks=point_tracks,
+        enabled=bool(args.filter_points_robust_bbox),
+        lower_percentile=float(args.point_bbox_lower_percentile),
+        upper_percentile=float(args.point_bbox_upper_percentile),
+        padding_ratio=float(args.point_bbox_padding_ratio),
+        min_points=int(args.point_bbox_min_points),
+    )
+    kept_point_ids = set(point_tracks)
+    for observation in state.observations:
+        image_name = str(observation["image_name"])
+        if image_name not in image_id_by_name or image_name not in state.registered_images:
+            continue
+        point_id = int(observation["point3D_id"])
+        if point_id not in kept_point_ids:
+            continue
+        observations_by_image.setdefault(image_name, []).append(observation)
 
     write_cameras(output_dir / "cameras.txt", camera_records)
     point2d_idx_lookup = write_images(
@@ -80,12 +109,85 @@ def main() -> int:
         observations_by_image,
     )
     write_points3d(output_dir / "points3D.txt", state, point_tracks, point2d_idx_lookup)
+    if args.point_filter_report:
+        report_path = resolve_project_path(args.point_filter_report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(point_filter_report, indent=2), encoding="utf-8")
 
     print(f"Scene: {scene['scene_name']}")
     print(f"Images exported: {len(registered_names)}")
     print(f"Points exported: {len(point_tracks)}")
+    if point_filter_report["enabled"]:
+        print(f"Points filtered: {point_filter_report['input_points']} -> {point_filter_report['output_points']}")
     print(f"Output: {output_dir}")
     return 0
+
+
+def filter_point_tracks_for_export(
+    *,
+    state,
+    point_tracks: dict[int, list[tuple[str, int, int]]],
+    enabled: bool,
+    lower_percentile: float,
+    upper_percentile: float,
+    padding_ratio: float,
+    min_points: int,
+) -> tuple[dict[int, list[tuple[str, int, int]]], dict]:
+    point_ids = np.array(sorted(point_tracks), dtype=np.int64)
+    report = {
+        "enabled": bool(enabled),
+        "method": "robust_bbox_percentile",
+        "input_points": int(len(point_ids)),
+        "output_points": int(len(point_ids)),
+        "removed_points": 0,
+        "lower_percentile": float(lower_percentile),
+        "upper_percentile": float(upper_percentile),
+        "padding_ratio": float(padding_ratio),
+        "min_points": int(min_points),
+        "applied": False,
+        "reason": "",
+    }
+    if not enabled:
+        report["reason"] = "disabled"
+        return point_tracks, report
+    if lower_percentile < 0.0 or upper_percentile > 100.0 or lower_percentile >= upper_percentile:
+        raise ValueError("Point bbox percentiles must satisfy 0 <= lower < upper <= 100.")
+    if len(point_ids) < min_points:
+        report["reason"] = "too_few_points"
+        return point_tracks, report
+
+    points = state.points3d[point_ids].astype(np.float64)
+    finite_mask = np.isfinite(points).all(axis=1)
+    finite_points = points[finite_mask]
+    finite_ids = point_ids[finite_mask]
+    if len(finite_ids) < min_points:
+        report["reason"] = "too_few_finite_points"
+        return point_tracks, report
+
+    lower = np.percentile(finite_points, lower_percentile, axis=0)
+    upper = np.percentile(finite_points, upper_percentile, axis=0)
+    padding = np.maximum(upper - lower, 0.0) * max(0.0, padding_ratio)
+    lower = lower - padding
+    upper = upper + padding
+    keep_mask = np.logical_and(finite_points >= lower.reshape(1, 3), finite_points <= upper.reshape(1, 3)).all(axis=1)
+    kept_ids = {int(point_id) for point_id in finite_ids[keep_mask]}
+    filtered_tracks = {point_id: track for point_id, track in point_tracks.items() if int(point_id) in kept_ids}
+    kept_points = state.points3d[np.array(sorted(filtered_tracks), dtype=np.int64)].astype(np.float64)
+    report.update(
+        {
+            "output_points": int(len(filtered_tracks)),
+            "removed_points": int(len(point_tracks) - len(filtered_tracks)),
+            "applied": True,
+            "reason": "ok",
+            "bounds_min": lower.tolist(),
+            "bounds_max": upper.tolist(),
+            "input_bbox_min": np.nanmin(points, axis=0).tolist(),
+            "input_bbox_max": np.nanmax(points, axis=0).tolist(),
+            "output_bbox_min": np.nanmin(kept_points, axis=0).tolist() if len(kept_points) else [],
+            "output_bbox_max": np.nanmax(kept_points, axis=0).tolist() if len(kept_points) else [],
+        }
+    )
+    return filtered_tracks, report
 
 
 def write_cameras(path: Path, camera_records: dict[int, tuple[int, int, float, float, float, float]]) -> None:

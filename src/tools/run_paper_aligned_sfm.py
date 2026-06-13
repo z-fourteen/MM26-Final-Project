@@ -79,6 +79,7 @@ def main() -> int:
     parser.add_argument("--filter-min-track-length", type=int, default=2)
     parser.add_argument("--diagnose-degenerate-cameras", action="store_true")
     parser.add_argument("--remove-degenerate-cameras", action="store_true")
+    parser.add_argument("--degenerate-min-observations", type=int, default=20)
     parser.add_argument("--enable-recursive-track-splitting", action="store_true")
     parser.add_argument("--use-track-cache", action="store_true", default=True)
     parser.add_argument("--disable-track-cache", action="store_false", dest="use_track_cache")
@@ -266,6 +267,7 @@ def main() -> int:
         "filter_after_ba": bool(args.filter_after_ba),
         "diagnose_degenerate_cameras": bool(args.diagnose_degenerate_cameras),
         "remove_degenerate_cameras": bool(args.remove_degenerate_cameras),
+        "degenerate_min_observations": int(args.degenerate_min_observations),
         "enable_recursive_track_splitting": bool(args.enable_recursive_track_splitting),
         "iterations": iterations,
         "stop_reason": stop_reason,
@@ -619,6 +621,8 @@ def run_ba_filtering_cycle(
             report_path_for_scene(args.scene, residual_for_degenerate),
             "--report-name",
             degenerate_report,
+            "--min-observations",
+            str(args.degenerate_min_observations),
         ]
         if args.remove_degenerate_cameras:
             argv.append("--remove-candidates")

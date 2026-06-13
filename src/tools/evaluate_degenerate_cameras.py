@@ -23,6 +23,18 @@ def main() -> int:
     parser.add_argument("--error-threshold", type=float, default=8.0)
     parser.add_argument("--min-covisibility-degree", type=int, default=1)
     parser.add_argument("--center-outlier-mad-scale", type=float, default=8.0)
+    parser.add_argument(
+        "--min-registered-for-center-outlier",
+        type=int,
+        default=8,
+        help="Only apply center-outlier removal when enough cameras are registered.",
+    )
+    parser.add_argument(
+        "--min-remaining-images",
+        type=int,
+        default=3,
+        help="When removing candidates, keep at least this many registered images.",
+    )
     parser.add_argument("--report-name", default="degenerate_camera_report.json")
     parser.add_argument("--remove-candidates", action="store_true")
     args = parser.parse_args()
@@ -89,7 +101,11 @@ def main() -> int:
             if residual_records:
                 reasons.append("no_residual_records")
         center_distance = float(center_distances.get(image_name, 0.0))
-        if center_distance > args.center_outlier_mad_scale:
+        center_check_enabled = (
+            args.center_outlier_mad_scale > 0.0
+            and len(state.registered_images) >= args.min_registered_for_center_outlier
+        )
+        if center_check_enabled and center_distance > args.center_outlier_mad_scale:
             reasons.append("center_outlier")
         per_camera.append(
             {
@@ -123,11 +139,30 @@ def main() -> int:
             "error_threshold": args.error_threshold,
             "min_covisibility_degree": args.min_covisibility_degree,
             "center_outlier_mad_scale": args.center_outlier_mad_scale,
+            "min_registered_for_center_outlier": args.min_registered_for_center_outlier,
+            "min_remaining_images": args.min_remaining_images,
         },
         "per_camera": per_camera,
     }
     if args.remove_candidates and candidates:
-        remove_names = {str(record["image_name"]) for record in candidates}
+        max_removable = max(0, len(state.registered_images) - max(1, args.min_remaining_images))
+        removable_candidates = candidates[:max_removable]
+        remove_names = {str(record["image_name"]) for record in removable_candidates}
+        skipped_names = [
+            str(record["image_name"])
+            for record in candidates
+            if str(record["image_name"]) not in remove_names
+        ]
+        if not remove_names:
+            report.update(
+                {
+                    "removed_camera_names": [],
+                    "skipped_removal_camera_names": skipped_names,
+                    "removal_skipped_reason": "min_remaining_images_guard",
+                }
+            )
+        else:
+            report["skipped_removal_camera_names"] = skipped_names
         for image_name in remove_names:
             state.registered_images.pop(image_name, None)
         kept_observations = [
@@ -135,18 +170,19 @@ def main() -> int:
             for observation in state.observations
             if str(observation["image_name"]) not in remove_names
         ]
-        filtered_state, point_id_map = compact_reconstruction_points(state, kept_observations)
-        state_path, registered_npz_path = save_reconstruction_state(filtered_state, sparse_dir)
-        report.update(
-            {
-                "removed_camera_names": sorted(remove_names),
-                "state_path": str(state_path),
-                "registered_npz_path": str(registered_npz_path),
-                "observations_after_camera_filtering": len(filtered_state.observations),
-                "points_after_camera_filtering": int(filtered_state.points3d.shape[0]),
-                "point_id_map_size": len(point_id_map),
-            }
-        )
+        if remove_names:
+            filtered_state, point_id_map = compact_reconstruction_points(state, kept_observations)
+            state_path, registered_npz_path = save_reconstruction_state(filtered_state, sparse_dir)
+            report.update(
+                {
+                    "removed_camera_names": sorted(remove_names),
+                    "state_path": str(state_path),
+                    "registered_npz_path": str(registered_npz_path),
+                    "observations_after_camera_filtering": len(filtered_state.observations),
+                    "points_after_camera_filtering": int(filtered_state.points3d.shape[0]),
+                    "point_id_map_size": len(point_id_map),
+                }
+            )
     report_path = report_dir / args.report_name
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

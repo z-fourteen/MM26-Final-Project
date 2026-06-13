@@ -18,6 +18,15 @@ def main() -> int:
     parser.add_argument("--copy-images", action="store_true", default=True)
     parser.add_argument("--link-images", action="store_true", help="Use symlinks instead of copying images when possible")
     parser.add_argument("--skip-check", action="store_true")
+    parser.add_argument(
+        "--filter-points-robust-bbox",
+        action="store_true",
+        help="Export only SfM points inside a robust coordinate bounding box before 3DGS training.",
+    )
+    parser.add_argument("--point-bbox-lower-percentile", type=float, default=1.0)
+    parser.add_argument("--point-bbox-upper-percentile", type=float, default=99.0)
+    parser.add_argument("--point-bbox-padding-ratio", type=float, default=0.1)
+    parser.add_argument("--point-bbox-min-points", type=int, default=100)
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -43,7 +52,10 @@ def main() -> int:
             str(sparse_dir),
             "--focal-scale",
             str(args.focal_scale),
+            "--point-filter-report",
+            str(resolve_project_path(scene["output_dir"]) / "reports" / f"{output_name}_point_filter_report.json"),
         ],
+        extra_args=build_point_filter_args(args),
     )
 
     report_path = resolve_project_path(scene["output_dir"]) / "reports" / f"{output_name}_3dgs_scene_check.json"
@@ -83,13 +95,29 @@ def copy_or_link_images(source_dir: Path, target_dir: Path, link: bool = False) 
         shutil.copy2(source, target)
 
 
-def call_tool(main_func, argv: list[str]) -> None:
+def build_point_filter_args(args: argparse.Namespace) -> list[str]:
+    if not args.filter_points_robust_bbox:
+        return []
+    return [
+        "--filter-points-robust-bbox",
+        "--point-bbox-lower-percentile",
+        str(args.point_bbox_lower_percentile),
+        "--point-bbox-upper-percentile",
+        str(args.point_bbox_upper_percentile),
+        "--point-bbox-padding-ratio",
+        str(args.point_bbox_padding_ratio),
+        "--point-bbox-min-points",
+        str(args.point_bbox_min_points),
+    ]
+
+
+def call_tool(main_func, argv: list[str], extra_args: list[str] | None = None) -> None:
     old_argv = sys.argv
     try:
-        sys.argv = argv
+        sys.argv = argv + list(extra_args or [])
         exit_code = main_func()
         if exit_code not in (0, None):
-            raise RuntimeError(f"Tool failed with exit code {exit_code}: {' '.join(argv)}")
+            raise RuntimeError(f"Tool failed with exit code {exit_code}: {' '.join(sys.argv)}")
     finally:
         sys.argv = old_argv
 

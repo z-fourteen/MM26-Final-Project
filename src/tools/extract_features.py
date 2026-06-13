@@ -16,6 +16,9 @@ def main() -> int:
     parser.add_argument("--scene", required=True, help="Path to configs/scenes/<scene>.yaml")
     parser.add_argument("--preview-count", type=int, default=3)
     parser.add_argument("--force", action="store_true", help="Recompute existing feature files.")
+    parser.add_argument("--alpha-threshold", type=int, default=1, help="Minimum alpha treated as valid foreground.")
+    parser.add_argument("--use-alpha-mask", action="store_true", default=True)
+    parser.add_argument("--disable-alpha-mask", action="store_false", dest="use_alpha_mask")
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -39,20 +42,26 @@ def main() -> int:
         feature_path = feature_dir / f"{image_path.stem}.npz"
         if feature_path.exists() and not args.force:
             data = np.load(feature_path)
-            results.append(
-                {
-                    "image_name": str(data["image_name"]),
-                    "num_keypoints": int(data["keypoints"].shape[0]),
-                    "feature_path": str(feature_path),
-                    "cached": True,
-                }
-            )
-            continue
+            cache_is_compatible = "used_alpha_mask" in data.files and "mask_coverage" in data.files
+            if cache_is_compatible:
+                results.append(
+                    {
+                        "image_name": str(data["image_name"]),
+                        "num_keypoints": int(data["keypoints"].shape[0]),
+                        "feature_path": str(feature_path),
+                        "cached": True,
+                        "used_alpha_mask": bool(data["used_alpha_mask"]),
+                        "mask_coverage": float(data["mask_coverage"]),
+                    }
+                )
+                continue
 
         result = extract_rootsift(
             image_path=image_path,
             feature_dir=feature_dir,
             max_image_size=max_image_size,
+            use_alpha_mask=bool(args.use_alpha_mask),
+            alpha_threshold=int(args.alpha_threshold),
         )
         results.append(
             {
@@ -61,6 +70,8 @@ def main() -> int:
                 "resized_size": result.resized_size,
                 "scale_factor": result.scale_factor,
                 "num_keypoints": result.num_keypoints,
+                "used_alpha_mask": result.used_alpha_mask,
+                "mask_coverage": result.mask_coverage,
                 "feature_path": str(result.output_path),
                 "cached": False,
             }
@@ -72,10 +83,16 @@ def main() -> int:
         draw_keypoints_preview(image_path, feature_path, preview_path)
 
     counts = np.array([item["num_keypoints"] for item in results], dtype=np.int32)
+    mask_coverages = np.array([item.get("mask_coverage", 1.0) for item in results], dtype=np.float32)
+    masked_images = sum(1 for item in results if item.get("used_alpha_mask", False))
     report = {
         "scene_name": scene["scene_name"],
         "num_images": len(images),
         "feature_dir": str(feature_dir),
+        "use_alpha_mask": bool(args.use_alpha_mask),
+        "alpha_threshold": int(args.alpha_threshold),
+        "num_alpha_masked_images": int(masked_images),
+        "mean_mask_coverage": float(mask_coverages.mean()),
         "min_keypoints": int(counts.min()),
         "max_keypoints": int(counts.max()),
         "mean_keypoints": float(counts.mean()),
@@ -87,6 +104,8 @@ def main() -> int:
     print(f"Scene: {scene['scene_name']}")
     print(f"Images: {len(images)}")
     print(f"Keypoints min/mean/max: {report['min_keypoints']} / {report['mean_keypoints']:.1f} / {report['max_keypoints']}")
+    print(f"Alpha-masked images: {report['num_alpha_masked_images']} / {len(images)}")
+    print(f"Mean mask coverage: {report['mean_mask_coverage']:.3f}")
     print(f"Report: {report_path}")
     return 0
 
