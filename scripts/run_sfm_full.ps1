@@ -31,11 +31,6 @@ if (-not (Test-Path $ImageDir)) {
     throw "Image directory not found: $ImageDir"
 }
 
-$RemoveDegenerateArgs = @()
-if ($RemoveDegenerateCameras) {
-    $RemoveDegenerateArgs = @("--remove-degenerate-cameras")
-}
-
 function Invoke-PythonStep {
     param(
         [Parameter(ValueFromRemainingArguments = $true)]
@@ -76,8 +71,31 @@ Invoke-PythonStep -m src.tools.run_paper_aligned_sfm `
     --global-ba-max-observations 0 `
     --diagnose-degenerate-cameras `
     --degenerate-min-observations $DegenerateMinObservations `
-    --report-name $ReportName `
-    $RemoveDegenerateArgs
+    --report-name $ReportName
+
+if ($RemoveDegenerateCameras) {
+    $LatestReportDir = Get-ChildItem -Path "outputs/$Scene/reports" -Directory |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($null -eq $LatestReportDir) {
+        throw "No controller report directory found under outputs/$Scene/reports"
+    }
+    $ResidualReport = Join-Path $LatestReportDir.FullName "final_global_ba2_registered_residual_after_filtering_report.json"
+    if (-not (Test-Path $ResidualReport)) {
+        $ResidualReport = Join-Path $LatestReportDir.FullName "paper_aligned_final_registered_residual_report.json"
+    }
+    if (-not (Test-Path $ResidualReport)) {
+        throw "No final residual report found in $($LatestReportDir.FullName)"
+    }
+    Invoke-PythonStep -m src.tools.evaluate_degenerate_cameras `
+        --scene $SceneConfig `
+        --residual-report $ResidualReport `
+        --min-observations $DegenerateMinObservations `
+        --center-outlier-mad-scale 0 `
+        --min-remaining-images 8 `
+        --report-name "${Scene}_post_sfm_degenerate_camera_report.json" `
+        --remove-candidates
+}
 
 Invoke-PythonStep -m src.tools.prepare_3dgs_from_sfm `
     --scene $SceneConfig `
