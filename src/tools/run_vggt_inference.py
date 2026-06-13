@@ -16,6 +16,10 @@ import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
 
+from src.adapters.vggt_adapter import ensure_vggt_importable
+
+ensure_vggt_importable()
+
 from vggt.models.vggt import VGGT
 from vggt.utils.geometry import closed_form_inverse_se3, unproject_depth_map_to_point_map
 from vggt.utils.load_fn import load_and_preprocess_images
@@ -126,8 +130,12 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(args.device)
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability(0)[0] >= 8 else torch.float16
-    print(f"Device: {torch.cuda.get_device_name(0)}; dtype: {dtype}")
+    if device.type == "cuda":
+        dtype = torch.bfloat16 if torch.cuda.get_device_capability(device)[0] >= 8 else torch.float16
+        print(f"Device: {torch.cuda.get_device_name(device)}; dtype: {dtype}")
+    else:
+        dtype = torch.float32
+        print(f"Device: {device}; dtype: {dtype}")
 
     image_paths = list_images(args.image_folder, args.max_images)
     print(f"Found {len(image_paths)} images")
@@ -136,7 +144,10 @@ def main():
 
     model = load_model(args.ckpt, device)
     with torch.no_grad():
-        with torch.amp.autocast("cuda", dtype=dtype):
+        if device.type == "cuda":
+            with torch.amp.autocast("cuda", dtype=dtype):
+                predictions = model(images)
+        else:
             predictions = model(images)
 
     extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
@@ -185,7 +196,8 @@ def main():
     print(f"Saved: {output_dir / 'cameras.json'}")
     print(f"Saved: {output_dir / 'camera_centers.csv'}")
     print(f"Saved: {output_dir / 'camera_pose_paper_format.csv'}")
-    print(f"CUDA max allocated: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
+    if device.type == "cuda":
+        print(f"CUDA max allocated: {torch.cuda.max_memory_allocated(device) / 1024**3:.2f} GB")
 
 
 if __name__ == "__main__":

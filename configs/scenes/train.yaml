@@ -1,0 +1,12 @@
+scene_name: train
+dataset_name: train
+image_dir: data/scenes/train/images
+feature_dir: data/scenes/train/features
+match_dir: data/scenes/train/matches
+verified_dir: data/scenes/train/verified
+track_dir: data/scenes/train/tracks
+sparse_dir: data/scenes/train/sparse/0
+undistorted_dir: data/scenes/train/undistorted
+output_dir: outputs/train
+subset:
+  enabled: false

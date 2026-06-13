@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan83
+dataset_name: DTU/scan83
+image_dir: data/scenes/dtu_scan83/images
+feature_dir: data/scenes/dtu_scan83/features
+match_dir: data/scenes/dtu_scan83/matches
+verified_dir: data/scenes/dtu_scan83/verified
+track_dir: data/scenes/dtu_scan83/tracks
+sparse_dir: data/scenes/dtu_scan83/sparse/0
+undistorted_dir: data/scenes/dtu_scan83/undistorted
+output_dir: outputs/dtu_scan83
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan83/images
+  num_images: 64

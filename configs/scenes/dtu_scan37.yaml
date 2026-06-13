@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan37
+dataset_name: DTU/scan37
+image_dir: data/scenes/dtu_scan37/images
+feature_dir: data/scenes/dtu_scan37/features
+match_dir: data/scenes/dtu_scan37/matches
+verified_dir: data/scenes/dtu_scan37/verified
+track_dir: data/scenes/dtu_scan37/tracks
+sparse_dir: data/scenes/dtu_scan37/sparse/0
+undistorted_dir: data/scenes/dtu_scan37/undistorted
+output_dir: outputs/dtu_scan37
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan37/images
+  num_images: 49

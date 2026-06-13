@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan24
+dataset_name: DTU/scan24
+image_dir: data/scenes/dtu_scan24/images
+feature_dir: data/scenes/dtu_scan24/features
+match_dir: data/scenes/dtu_scan24/matches
+verified_dir: data/scenes/dtu_scan24/verified
+track_dir: data/scenes/dtu_scan24/tracks
+sparse_dir: data/scenes/dtu_scan24/sparse/0
+undistorted_dir: data/scenes/dtu_scan24/undistorted
+output_dir: outputs/dtu_scan24
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan24/images
+  num_images: 49

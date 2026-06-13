@@ -1,0 +1,101 @@
+% =====================================================================
+%  数模大作业主文件
+% =====================================================================
+\documentclass[lang=cn,a4paper,newtx]{elegantpaper} % 保持与原模板一致的中文模式
+
+% --- 你的论文基础信息配置 ---
+\title{你的校内数学建模大作业题目}
+\author{姓名1 \\ 学号：XXXXXXXX \and 姓名2 \\ 学号：XXXXXXXX \and 姓名3 \\ 学号：XXXXXXXX}
+\institute{某某大学 某某学院}
+\version{} % 留空即可，校内作业通常不需要版本号
+\date{\zhtoday} % 自动生成当天的中文日期
+
+% --- 如果需要常用的数模宏包，可以在这里自行添加 ---
+\usepackage{array}
+\usepackage{booktabs} % 优化三线表
+\usepackage{longtable} % 如果有很长的表格需要跨页
+
+% 引入参考文献库（必须保留，名字要和左侧的 bib 文件一致）
+\addbibresource[location=local]{reference.bib}
+
+\begin{document}
+
+\maketitle % 生成精美的 ElegantPaper 风格标题区
+
+% ==================== 1. 摘要页 ====================
+\begin{abstract}
+本文针对……问题，建立了……模型，实现了……。
+针对问题一，我们采用了……方法，求得结果为……；
+针对问题二，我们引入了……，通过……算法进行求解，结果表明……。
+
+\keywords{数学建模；大作业；关键词1；关键词2}
+\end{abstract}
+
+\newpage % 摘要写完后强行分页，进入数模正文
+
+% ==================== 2. 问题重述与分析 ====================
+\section{问题重述与分析}
+\subsection{问题背景}
+随着……的发展，……
+\subsection{问题重述}
+我们需要解决以下几个核心问题：……
+\subsection{问题分析}
+针对问题一，其本质是一个……问题，我们可以考虑用……
+
+% ==================== 3. 模型假设 ====================
+\section{模型假设}
+为了简化问题，本文做出以下合理假设：
+\begin{enumerate}
+    \item 假设题目中所给的数据真实可靠；
+    \item 忽略……对系统带来的次要影响；
+    \item 假设在模型求解过程中，……保持不变。
+\end{enumerate}
+
+% ==================== 4. 符号说明 ====================
+\section{符号说明}
+本文中使用的核心数学符号及其物理意义如下表所示：
+\begin{table}[htbp]
+\centering
+\caption{核心符号及含义说明}
+\begin{tabular}{ccc}
+\toprule
+\textbf{符号} & \textbf{物理意义} & \textbf{单位} \\ \midrule
+$t$  & 时间 &  s  \\
+$v$  & 速度 &  m/s \\
+$\alpha$ & 阻尼系数 & 无 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+% ==================== 5. 模型的建立与求解（核心） ====================
+\section{模型的建立与求解}
+\subsection{问题一模型的建立与求解}
+\subsubsection{模型建立}
+根据……定律，我们可以得到以下关系式：
+\begin{equation}
+    y = f(x) + \epsilon
+\end{equation}
+\subsubsection{模型求解与结果分析}
+使用 MATLAB/Python 对上述模型进行求解，得到结果。
+
+% ==================== 6. 模型的评价、改进与推广 ====================
+\section{模型的评价、改进与推广}
+\subsection{模型的优点}
+\begin{itemize}
+    \item 模型结构简单，计算速度快；
+    \item 鲁棒性强，不易受噪点干扰。
+\end{itemize}
+\subsection{模型的缺点与改进方向}
+未考虑……的影响，未来可以引入……进行修正。
+
+% ==================== 7. 参考文献 ====================
+% 你们可以在这里直接用 bibtex 引用，或者临时手动用 \bibitem
+\printbibliography[heading=bibintoc, title=\ebibname]
+
+% ==================== 8. 附录（贴代码） ====================
+\newpage
+\appendix
+\section{核心源代码}
+\subsection{问题一求解 Python 代码}
+% 如果有代码，可以在这里展示
+
+\end{document}

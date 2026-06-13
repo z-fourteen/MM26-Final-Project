@@ -1,0 +1,15 @@
+scene_name: south_building_small
+dataset_name: south-building
+image_dir: data/scenes/south_building_small/images
+feature_dir: data/scenes/south_building_small/features
+match_dir: data/scenes/south_building_small/matches
+verified_dir: data/scenes/south_building_small/verified
+track_dir: data/scenes/south_building_small/tracks
+sparse_dir: data/scenes/south_building_small/sparse/0
+undistorted_dir: data/scenes/south_building_small/undistorted
+output_dir: outputs/south_building_small
+subset:
+  enabled: true
+  target_num_images: 50
+  selection: filename_sorted_first_n
+  source_image_dir: data\raw\south-building\images

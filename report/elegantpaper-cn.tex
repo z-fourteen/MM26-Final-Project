@@ -1,0 +1,171 @@
+﻿\documentclass[lang=cn,a4paper,newtx]{elegantpaper}
+
+\title{ElegantPaper: 涓€涓紭缇庣殑 \LaTeX\ 宸ヤ綔璁烘枃妯℃澘}
+\author{浣滆€? \\ 鏌愭煇澶у/鏈烘瀯 \and 浣滆€? \\ 鏌愭煇澶у/鏈烘瀯}
+\institute{\href{https://github.com/ElegantLaTeX}{Elegant\LaTeX\ 椤圭洰缁剗}
+
+\version{0.12}
+\date{\zhdate{2026/2/27}}
+
+% 鏈枃妗ｅ懡浠?\usepackage{array}
+\newcommand{\ccr}[1]{\makecell{{\color{#1}\rule{1cm}{1cm}}}}
+\addbibresource[location=local]{reference.bib} % 鍙傝€冩枃鐚紝涓嶈鍒犻櫎
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+鏈枃涓?\href{https://github.com/ElegantLaTeX/ElegantPaper/}{ElegantPaper} 鐨勮鏄庢枃妗ｃ€傛妯℃澘鍩轰簬 \LaTeX\ 鐨?article 绫伙紝涓撲负宸ヤ綔璁烘枃鍐欎綔鑰岃璁°€傝璁¤繖涓ā鏉跨殑鍒濊》鏄浣滆€呬笉鐢ㄥ叧蹇冨伐浣滆鏂囩殑鏍煎紡锛屼笓蹇冨啓浣滐紝浠庤€屾湁鏇村姞鑸掑績鐨勫啓浣滀綋楠屻€傚鏋滀綘鏈夊叾浠栭棶棰樸€佸缓璁垨鑰呮姤鍛?bug锛屽彲浠ュ湪 \href{https://github.com/ElegantLaTeX/ElegantPaper/issues}{GitHub::ElegantPaper/issues} 鐣欒█銆傚鏋滀綘鎯充簡瑙ｆ洿澶?Elegant\LaTeX\ 椤圭洰缁勮璁＄殑妯℃澘锛岃璁块棶 \href{https://github.com/ElegantLaTeX/}{GitHub::ElegantLaTeX}銆?\keywords{Elegant\LaTeX{}锛屽伐浣滆鏂囷紝妯℃澘}
+\end{abstract}
+
+\section{妯℃澘浣跨敤椤荤煡}
+
+\textcolor{red}{\bfseries 鏈ā鏉胯嚜 2023 骞?1 鏈?1 鏃ヨ捣鍋滄缁存姢锛屽苟涓嶅缓璁娇鐢紝浣嗛壌浜庣敤鎴风兢浣撳簽澶э紝鑷?2026 骞磋捣閲嶆柊鍙戝竷銆備负淇濊瘉涔嬪墠鐗堟湰鐨勭敤鎴蜂粛鑳芥煡闃呰鏄庢枃妗ｏ紝鏈鏄庢枃妗ｄ繚鐣欎簡杩囧線淇℃伅銆倉
+
+\subsection{娉ㄦ剰浜嬮」}
+\textbf{鏂囩尞閮ㄥ垎}锛氭垜浠皢 bibtex 鐨勯粯璁ゆ枃鐚紪璇戞柟寮忔敼涓?biblatex锛屼笉杩囨垜浠篃鎻愪緵浜嗕袱涓悗绔紝\lstinline{bibend=biber} 鍜?\lstinline{bibend=bibtex}銆傜壒鍒渶瑕佹敞鎰忕殑鏄粠 0.10 寮€濮嬶紝鏂囩尞鏂囦欢鏀逛负 \lstinline{reference.bib}锛屼笌 ElegantBook 淇濇寔涓€鑷达紝鑰屽弬鑰冩枃鐚殑寮曟枃鏍峰紡绛夋洿澶氭牸寮忥紝璇峰弬鑰冨悗鏂囧弬鑰冩枃鐚儴鍒嗭紝鏇村鏍峰紡鍙互鍙傝€?biblatex 鏂囨。銆?
+
+\textbf{瀛椾綋閮ㄥ垎}锛屾垜浠皢 newtxtext 瀹忓寘鐨勬敮鎸佹柟寮忔敼涓轰簡瀛椾綋鍚嶇О璁惧畾鏂瑰紡锛岃瀹氳嫳鏂囧瓧浣撲负 TeX Gyre Terms/Heros锛岃嫳鏂囧瓧浣撻儴鍒嗭紝鏍规嵁缂栬瘧鏂瑰紡閫夋嫨涓嶅悓瀛椾綋銆傚浜庝竴鑸敤鎴疯€岃█锛屼笉澶渶瑕佸叧蹇冭繖閮ㄥ垎鍐呭銆?
+鍙﹀锛屼腑鏂囪鍔″繀浣跨敤 \hologo{XeLaTeX} 缂栬瘧銆?
+\subsection{妯℃澘浠嬬粛}
+
+姝ゆā鏉垮熀浜?\LaTeX\ 鐨勬爣鍑嗘枃绫?article 璁捐锛屾墍浠?article 鏂囩被鐨勯€夐」涔熻兘浼犻€掔粰鏈ā鏉匡紝姣斿 \lstinline{a4paper, 11pt} 绛夌瓑銆?
+\begin{lstlisting}
+\documentclass[a4paper,11pt]{elegantpaper}
+\end{lstlisting}
+
+\textbf{娉ㄦ剰}锛欵legant\LaTeX\ 绯诲垪妯℃澘宸茬粡鍏ㄩ儴涓婁紶鑷?\href{https://www.overleaf.com/latex/templates/elegantpaper-template/yzghrqjhmmmr}{Overleaf} 涓婏紝鐢ㄦ埛鍙互鍦ㄧ嚎浣跨敤銆傚彟澶栵紝涓轰簡鏂逛究鍥藉唴鐢ㄦ埛锛屾ā鏉夸篃宸茬粡浼犺嚦\href{https://gitee.com/ElegantLaTeX/ElegantPaper}{鐮佷簯}銆?
+
+\subsection{鍏ㄥ眬閫夐」}
+姝ゆā鏉垮畾涔変簡涓€涓瑷€閫夐」 \lstinline{lang}锛屽彲浠ラ€夋嫨鑻辨枃妯″紡 \lstinline{lang=en}锛堥粯璁わ級鎴栬€呬腑鏂囨ā寮?\lstinline{lang=cn}銆傚綋閫夋嫨涓枃妯″紡鏃讹紝鍥捐〃鐨勬爣棰樺紩瀵艰瘝浠ュ強鍙傝€冩枃鐚紝瀹氱悊寮曞璇嶇瓑淇℃伅浼氬彉鎴愪腑鏂囥€備綘鍙互閫氳繃涓嬮潰涓ょ鏂瑰紡鏉ラ€夋嫨璇█妯″紡锛?\begin{lstlisting}
+\documentclass[lang=cn]{elegantpaper} % or
+\documentclass[cn]{elegantpaper}
+\end{lstlisting}
+
+\textbf{娉ㄦ剰锛殅 鑻辨枃妯″紡涓嬶紝鐢变簬娌℃湁娣诲姞涓枃瀹忓寘锛屾棤娉曡緭鍏ヤ腑鏂囥€傚鏋滈渶瑕佽緭鍏ヤ腑鏂囷紝鍙互閫氳繃鍦ㄥ瑷€鍖哄紩鍏ヤ腑鏂囧畯鍖?\lstinline{ctex} 鎴栬€呭姞鍏?\lstinline{xeCJK} 瀹忓寘鍚庤嚜琛岃缃瓧浣撱€?
+\begin{lstlisting}
+\usepackage[UTF8,scheme=plain]{ctex}
+\end{lstlisting}
+
+\subsection{鏁板瀛椾綋閫夐」}
+
+鏈ā鏉垮畾涔変簡涓€涓暟瀛﹀瓧浣撻€夐」锛圽lstinline{math}锛夛紝鍙€夐」鏈変笁涓細
+\begin{enumerate}
+  \item \lstinline{math=cm}锛堥粯璁わ級锛屼娇鐢?\LaTeX\ 榛樿鏁板瀛椾綋锛堟帹鑽愶紝鏃犻渶澹版槑锛夛紱
+  \item \lstinline{math=newtx}锛屼娇鐢?\lstinline{newtxmath} 璁剧疆鏁板瀛椾綋锛堟綔鍦ㄩ棶棰樻瘮杈冨锛夈€?  \item \lstinline{math=mtpro2}锛屼娇鐢?\lstinline{mtpro2} 瀹忓寘璁剧疆鏁板瀛椾綋锛岃姹傜敤鎴峰凡缁忔垚鍔熷畨瑁呮瀹忓寘銆?\end{enumerate}
+
+\subsection{涓枃瀛椾綋閫夐」}
+
+妯℃澘鎻愪緵涓枃瀛椾綋閫夐」 \lstinline{chinesefont}锛屽彲閫夐」鏈?\begin{enumerate}
+  \item \lstinline{ctexfont}锛氶粯璁ら€夐」锛屼娇鐢?\lstinline{ctex} 瀹忓寘鏍规嵁绯荤粺鑷閫夋嫨瀛椾綋锛屽彲鑳藉瓨鍦ㄥ瓧浣撶己澶辩殑闂锛屾洿澶氬唴瀹瑰弬鑰?\lstinline{ctex} 瀹忓寘\href{https://ctan.org/pkg/ctex}{瀹樻柟鏂囨。}\footnote{鍙互浣跨敤鍛戒护鎻愮ず绗︼紝杈撳叆 \lstinline{texdoc ctex} 璋冨嚭鏈湴 \lstinline{ctex} 瀹忓寘鏂囨。}銆?  \item \lstinline{founder}锛氭柟姝ｅ瓧浣撻€夐」锛圽textbf{闇€瑕佸畨瑁呮柟姝ｅ瓧浣搣锛夛紝鍚庡彴璋冪敤 \lstinline{ctex} 瀹忓寘骞朵笖浣跨敤 \lstinline{fontset=none} 閫夐」锛岀劧鍚庤缃瓧浣撲负鏂规鍥涙鍏嶈垂瀛椾綋锛屾柟姝ｅ瓧浣撲笅杞芥敞鎰忎簨椤硅鍚庢枃锛岀敤鎴峰彧闇€瑕佸畨瑁呮柟姝ｅ瓧浣撳嵆鍙娇鐢ㄨ閫夐」銆?  \item \lstinline{nofont}锛氬悗鍙颁細璋冪敤 \lstinline{ctex} 瀹忓寘骞朵笖浣跨敤 \lstinline{fontset=none} 閫夐」锛屼笉璁惧畾涓枃瀛椾綋锛岀敤鎴峰彲浠ヨ嚜琛岃缃腑鏂囧瓧浣擄紝鍏蜂綋瑙佸悗鏂囥€?\end{enumerate}
+
+\subsubsection{鏂规瀛椾綋閫夐」}
+鐢变簬浣跨敤 \lstinline{ctex} 瀹忓寘榛樿璋冪敤绯荤粺宸叉湁鐨勫瓧浣擄紝閮ㄥ垎绯荤粺瀛椾綋缂哄け涓ラ噸锛屽洜姝わ紝鐢ㄦ埛甯屾湜鑳藉浣跨敤鍏跺畠瀛椾綋锛屾垜浠帹鑽愪娇鐢ㄦ柟姝ｅ瓧浣撱€傛柟姝ｇ殑{\songti 鏂规涔﹀畫}銆亄\heiti 鏂规榛戜綋}銆亄\kaishu 鏂规妤蜂綋}銆亄\fangsong 鏂规浠垮畫}鍥涙瀛椾綋鍧囧彲鍏嶈垂璇曠敤锛屼笖鍙敤浜庡晢涓氱敤閫斻€傜敤鎴峰彲浠ヨ嚜琛屼粠\href{http://www.foundertype.com/}{鏂规瀛椾綋瀹樼綉}涓嬭浇姝ゅ洓娆惧瓧浣擄紝鍦ㄤ笅杞界殑鏃跺€欒\textbf{鍔″繀}娉ㄦ剰閫夋嫨 GBK 瀛楃闆嗐€傚畨瑁呮椂锛寋\kaishu Windows 11 鐢ㄦ埛璇峰彸閿€夋嫨涓哄叏閮ㄧ敤鎴峰畨瑁咃紝鍚﹀垯浼氭壘涓嶅埌瀛椾綋銆倉
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[width=0.9\textwidth]{founder.png}
+\end{figure}
+
+\subsubsection{鍏朵粬涓枃瀛椾綋}
+濡傛灉浣犳兂瀹屽叏鑷畾涔夊瓧浣揬footnote{杩欓噷浠嶇劧浠ユ柟姝ｅ瓧浣撲负渚嬨€倉锛屼綘鍙互閫夋嫨 \lstinline{chinesefont=nofont}锛岀劧鍚庡湪瀵艰█鍖鸿缃嵆鍙紝鍙互鍙傝€冧笅鏂逛唬鐮侊細
+\begin{lstlisting}
+\setCJKmainfont[BoldFont={FZHei-B01},ItalicFont={FZKai-Z03}]{FZShuSong-Z01}
+\setCJKsansfont[BoldFont={FZHei-B01}]{FZKai-Z03}
+\setCJKmonofont[BoldFont={FZHei-B01}]{FZFangSong-Z02}
+\setCJKfamilyfont{zhsong}{FZShuSong-Z01}
+\setCJKfamilyfont{zhhei}{FZHei-B01}
+\setCJKfamilyfont{zhkai}[BoldFont={FZHei-B01}]{FZKai-Z03}
+\setCJKfamilyfont{zhfs}[BoldFont={FZHei-B01}]{FZFangSong-Z02}
+\newcommand*{\songti}{\CJKfamily{zhsong}}
+\newcommand*{\heiti}{\CJKfamily{zhhei}}
+\newcommand*{\kaishu}{\CJKfamily{zhkai}}
+\newcommand*{\fangsong}{\CJKfamily{zhfs}}
+\end{lstlisting}
+
+
+
+\subsection{鑷畾涔夊懡浠
+姝ゆā鏉垮苟娌℃湁淇敼浠讳綍榛樿鐨?\LaTeX\ 鍛戒护鎴栬€呯幆澧僜footnote{鐩殑鏄繚璇佷唬鐮佺殑鍙鐢ㄦ€э紝璇风敤鎴峰叧娉ㄥ唴瀹癸紝涓嶈澶湪鎰忔牸寮忥紝杩欐墠鏄湰宸ヤ綔璁烘枃妯℃澘鐨勬剰涔夈€倉銆傚彟澶栵紝鏈ā鏉垮彲浠ヤ娇鐢ㄧ殑 4 涓澶栧懡浠わ細
+\begin{enumerate}
+  \item \lstinline{\email}锛氬垱寤洪偖绠卞湴鍧€鐨勯摼鎺ワ紝姣斿 \email{xxx@outlook.com}锛?  \item \lstinline{\figref}锛氱敤娉曞拰 \lstinline{\ref} 绫讳技锛屼絾鏄細鍦ㄦ彃鍥剧殑鏍囬鍓嶆坊鍔?<\textbf{鍥?n}> 锛?  \item \lstinline{\tabref}锛氱敤娉曞拰 \lstinline{\ref} 绫讳技锛屼絾鏄細鍦ㄨ〃鏍肩殑鏍囬鍓嶆坊鍔?<\textbf{琛?n}>锛?  \item \lstinline{\keywords}锛氫负鎽樿鐜娣诲姞鍏抽敭璇嶃€?\end{enumerate}
+
+\subsection{鍙傝€冩枃鐚畗
+
+鏂囩尞閮ㄥ垎锛屾湰妯℃澘璋冪敤浜?biblatex 瀹忓寘锛屽苟鎻愪緵浜?biber锛堥粯璁わ級 鍜?bibtex 涓や釜鍚庣閫夐」锛屽彲浠ヤ娇鐢?\lstinline{bibend} 杩涜淇敼锛?
+\begin{lstlisting}
+  \documentclass[bibtex]{elegantpaper}
+  \documentclass[bibend=bibtex]{elegantpaper}
+\end{lstlisting}
+
+鍏充簬鏂囩尞鏉＄洰锛坆ib item锛夛紝浣犲彲浠ュ湪璋锋瓕瀛︽湳锛孧endeley锛孍ndnote 涓彇锛岀劧鍚庢妸瀹冧滑娣诲姞鍒?\lstinline{reference.bib} 涓€傚湪鏂囦腑寮曠敤鐨勬椂鍊欙紝寮曠敤瀹冧滑鐨勯敭鍊硷紙bib key锛夊嵆鍙€?
+涓轰簡鏂逛究鏂囩尞鏍峰紡淇敼锛屾ā鏉垮紩鍏ヤ簡 \lstinline{bibstyle} 鍜?\lstinline{citestyle} 閫夐」锛岄粯璁ゅ潎涓烘暟瀛楁牸寮忥紙numeric锛夛紝鍙傝€冩枃鐚ず渚嬶細\cite{cn1,en2,en3} 浣跨敤浜嗕腑鍥戒竴涓ぇ鍨嬬殑 P2P 骞冲彴锛堜汉浜鸿捶锛夌殑鏁版嵁鏉ユ楠岀敺鎬ф姇璧勮€呭拰濂虫€ф姇璧勮€呭湪鎶曡祫琛ㄧ幇涓婃槸鍚︽湁鏄捐憲宸紓銆?
+濡傛灉闇€瑕佽缃负鍥芥爣 GB7714-2015锛岄渶瑕佷娇鐢細
+\begin{lstlisting}
+  \documentclass[citestyle=gb7714-2015, bibstyle=gb7714-2015]{elegantpaper}
+\end{lstlisting}
+
+濡傛灉闇€瑕佹坊鍔犳帓搴忔柟寮忥紝鍙互鍦ㄥ瑷€鍖哄姞鍏?\begin{lstlisting}
+  \ExecuteBibliographyOptions{sorting=ynt}
+\end{lstlisting}
+
+鍚敤鍥芥爣涔嬪悗锛屽彲浠ュ姞鍏?\lstinline{sorting=gb7714-2015}銆?
+
+\section{浣跨敤 newtx 绯诲垪瀛椾綋}
+
+濡傛灉闇€瑕佷娇鐢ㄥ師鍏堢増鏈殑 \lstinline{newtx} 绯诲垪瀛椾綋锛屽彲浠ラ€氳繃鏄剧ず澹版槑鏁板瀛椾綋锛?
+\begin{lstlisting}
+\documentclass[math=newtx]{elegantpaper}
+\end{lstlisting}
+
+\subsection{杩炲瓧绗
+
+濡傛灉浣跨敤 \lstinline{newtx} 绯诲垪瀛椾綋瀹忓寘锛岄渶瑕佹敞鎰忎笅杩炲瓧绗︾殑闂銆?\begin{equation}
+  \int_{R^q} f(x,y) dy.\emph{of\kern0pt f}
+\end{equation}
+
+\begin{lstlisting}
+\begin{equation}
+  \int_{R^q} f(x,y) dy.\emph{of \kern0pt f}
+\end{equation}
+\end{lstlisting}
+
+\subsection{瀹忓寘鍐茬獊}
+
+鏈夌敤鎴峰弽棣堟ā鏉垮湪浣跨敤 \lstinline{yhmath} 浠ュ強 \lstinline{esvect} 绛夊畯鍖呮椂浼氭姤閿欙細
+\begin{lstlisting}
+LaTeX Error:
+   Too many symbol fonts declared.
+\end{lstlisting}
+
+鍘熷洜鏄湪浣跨敤 \lstinline{newtxmath} 瀹忓寘鏃讹紝閲嶆柊瀹氫箟浜嗘暟瀛﹀瓧浣撶敤浜庡ぇ鍨嬫搷浣滅锛岃揪鍒颁簡 {\heiti 鏈€澶?16 涓暟瀛﹀瓧浣搣 鐨勪笂闄愶紝鍦ㄨ皟鐢ㄥ叾浠栧畯鍖呯殑鏃跺€欙紝鏃犳硶鏂板鏁板瀛椾綋銆備负浜嗗噺灏戣皟鐢ㄩ潪甯哥敤瀹忓寘锛屽湪姝ょ粰鍑哄浣曡皟鐢?\lstinline{yhmath} 浠ュ強 \lstinline{esvect} 瀹忓寘鐨勬柟娉曘€?
+璇峰湪 \lstinline{elegantpaper.cls} 鍐呮悳绱?\lstinline{yhmath} 鎴栬€?\lstinline{esvect}锛屽皢浣犳墍闇€瑕佺殑瀹忓寘鍔犺浇璇彞\textit{鍙栨秷娉ㄩ噴}鍗冲彲銆?
+
+\section{甯歌闂 FAQ}
+
+\begin{enumerate}[label=\arabic*).]
+  \item \textit{濡備綍鍒犻櫎鐗堟湰淇℃伅锛焳\\
+    瀵艰█鍖轰笉鍐?\lstinline|\version{x.xx}| 鍗冲彲銆?  \item \textit{濡備綍鍒犻櫎鏃ユ湡锛焳\\
+    闇€瑕佹敞鎰忕殑鏄紝涓庣増鏈?\lstinline{\version} 涓嶅悓鐨勬槸锛屽瑷€鍖轰笉鍐欐垨娉ㄩ噴 \lstinline{\date} 鐨勮瘽锛屼粛鐒朵細鎵撳嵃鍑哄綋鏃ユ棩鏈燂紝鍘熷洜鏄?\lstinline{\date} 鏈夐粯璁ゅ弬鏁般€傚鏋滀笉闇€瑕佹棩鏈熺殑璇濓紝鏃ユ湡鍙互鐣欑┖鍗冲彲锛屼篃鍗?\lstinline|\date{}|銆?  \item \textit{濡備綍鑾峰緱涓枃鏃ユ湡锛焳\\
+    涓轰簡鑾峰緱涓枃鏃ユ湡锛屽繀椤诲湪涓枃妯″紡涓媆footnote{鑻辨枃妯″紡涓嬶紝鐢变簬鏈姞杞戒腑鏂囧畯鍖咃紝鏃犳硶杈撳叆涓枃銆倉锛屼娇鐢?\lstinline|\date{\zhdate{2019/10/11}}|锛屽鏋滈渶瑕佸綋澶╃殑姹夊寲鏃ユ湡锛屽彲浠ヤ娇鐢?\lstinline|\date{\zhtoday}|锛岃繖涓や釜鍛戒护閮芥潵婧愪簬 \href{https://ctan.org/pkg/zhnumber}{\lstinline{zhnumber}} 瀹忓寘銆?  \item \textit{濡備綍娣诲姞澶氫釜浣滆€咃紵}\\
+    鍦?\lstinline{\author} 閲岄潰浣跨敤 \lstinline{\and}锛屼綔鑰呭崟浣嶅彲浠ョ敤 \lstinline{\\} 鎹㈣銆?    \begin{lstlisting}
+    \author{author 1\\ org. 1 \and author 2 \\ org. 2 }
+    \end{lstlisting}
+  \item \textit{濡備綍娣诲姞涓嫳鏂囨憳瑕侊紵}\\
+    璇峰弬鑰?\href{https://github.com/ElegantLaTeX/ElegantPaper/issues/5}{GitHub::ElegantPaper/issues/5}
+\end{enumerate}
+
+
+\section{鑷磋阿}
+
+鐗瑰埆鎰熻阿 \href{https://github.com/sikouhjw}{sikouhjw} 鍜?\href{https://github.com/syvshc}{syvshc}  闀挎湡浠ユ潵瀵逛簬 Github 涓?issue 鐨勫揩閫熷洖搴旓紝浠ュ強鍚勪釜绀惧尯璁哄潧瀵逛簬 ElegantLaTeX 鐩稿叧闂鐨勫洖澶嶃€傜壒鍒劅璋?ChinaTeX 浠ュ強 \href{http://www.latexstudio.net/}{LaTeX 宸ヤ綔瀹 瀵逛簬鏈郴鍒楁ā鏉跨殑澶у姏瀹ｄ紶涓庢帹骞裤€?
+濡傛灉浣犲枩娆㈡垜浠殑妯℃澘锛屼綘鍙互鍦?Github 涓婃敹钘忔垜浠殑妯℃澘銆?
+\nocite{*}
+\printbibliography[heading=bibintoc, title=\ebibname]
+
+\appendix
+%\appendixpage
+\addappheadtotoc
+
+\end{document}
