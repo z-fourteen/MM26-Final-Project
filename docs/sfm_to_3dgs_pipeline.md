@@ -53,6 +53,12 @@ predictions.npz   # extrinsic, intrinsic
 points_depth.npz  # xyz, rgb, optional confidence
 ```
 
+The lightweight project-owned runner is:
+
+```powershell
+D:\06_envs\mm26\python.exe -m src.tools.run_vggt_inference --image_folder data/scenes/dtu_scan55/images --output_dir outputs/dtu_scan55/vggt
+```
+
 Then prepare the VGGT 3DGS source directory:
 
 ```powershell

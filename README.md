@@ -18,6 +18,7 @@ configs/                 Scene and third-party path configuration
 src/sfm/                 Project SfM implementation
 src/tools/               Project command-line tools and pipeline wrappers
 src/adapters/            Thin adapters around vendored repositories
+src/innovation/          Notes on project-owned innovations and adaptations
 third_party/vggt/        Vendored VGGT upstream repository
 third_party/gaussian-splatting/
                          Vendored 3DGS upstream repository
@@ -39,4 +40,12 @@ On a CUDA-enabled machine, train 3DGS through the vendored backend:
 
 ```bash
 python third_party/gaussian-splatting/train.py -s data/3dgs_inputs/dtu_scan55_sfm -m outputs/3dgs/dtu_scan55_sfm
+```
+
+Project-owned VGGT/3DGS experiment helpers live in `src/tools/`, not inside the
+vendored VGGT repository:
+
+```bash
+python -m src.tools.run_vggt_inference --image_folder data/scenes/dtu_scan55/images --output_dir outputs/dtu_scan55/vggt
+python -m src.tools.prepare_3dgs_from_vggt --scene configs/scenes/dtu_scan55.yaml --predictions outputs/dtu_scan55/vggt/predictions.npz --points outputs/dtu_scan55/vggt/points_depth.npz
 ```

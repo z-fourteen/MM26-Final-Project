@@ -4,6 +4,8 @@ This project combines an in-project SfM implementation with vendored
 third-party research code. The boundary is intentional:
 
 - `src/` contains project-owned code, adapters, tools, and SfM logic.
+- `src/innovation/` documents project-owned innovations without duplicating
+  implementation code.
 - `third_party/` contains upstream repositories kept as intact as practical.
 - `data/3dgs_inputs/` and `outputs/` contain generated artifacts and are not
   committed through normal Git.
@@ -22,6 +24,8 @@ third-party research code. The boundary is intentional:
 - Do not remove original headers in third-party files.
 - Prefer wrappers in `src/tools/` and adapters in `src/adapters/` over edits
   inside `third_party/`.
+- Project-owned scripts must not live inside vendored repositories. Move them
+  to `src/tools/` and keep only upstream code under `third_party/`.
 - If a third-party file must be modified, document the reason in
   `docs/third_party_patches.md` and add a short "Modified for integration"
   note near the file header.

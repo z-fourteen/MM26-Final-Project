@@ -16,6 +16,10 @@ import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
 
+from src.adapters.vggt_adapter import ensure_vggt_importable
+
+ensure_vggt_importable()
+
 from vggt.models.vggt import VGGT
 from vggt.utils.geometry import closed_form_inverse_se3, unproject_depth_map_to_point_map
 from vggt.utils.load_fn import load_and_preprocess_images

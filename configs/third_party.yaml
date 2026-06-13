@@ -3,11 +3,13 @@
     repo_path: third_party/vggt
     package_path: third_party/vggt/vggt
     checkpoint_path: null
+    inference_entry: src.tools.run_vggt_inference
     notes: "Vendored upstream repository. Keep core model code intact."
   gaussian_splatting:
     repo_path: third_party/gaussian-splatting
     train_entry: third_party/gaussian-splatting/train.py
     render_entry: third_party/gaussian-splatting/render.py
+    minimal_gsplat_entry: src.tools.train_vggt_gsplat
     output_root: outputs/3dgs
     notes: "Vendored 3DGS training/rendering backend. CUDA is required for training."
   vggt_omega:
