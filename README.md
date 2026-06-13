@@ -132,7 +132,7 @@ data/scenes/<scene>/
 # configs/scenes/<scene>.yaml
 ```
 
-推荐公开数据：COLMAP South Building / Gerrard Hall。自采数据建议 40-80 张，保证相邻图像 60%-80% 重叠，避免纯旋转、玻璃/强反光/大面积弱纹理。
+本项目当前以 **DTU scan 系列**作为主实验数据，例如 `dtu_scan55`、`dtu_scan65`、`dtu_scan83` 等。将每个 DTU 场景图像放入 `data/scenes/<scene>/images/`，并使用对应的 `configs/scenes/dtu_scan*.yaml`；自采数据只建议作为展示补充，需保证相邻图像 60%-80% 重叠，避免纯旋转、玻璃/强反光/大面积弱纹理。
 
 ### 3. 运行 SfM 主流程
 
@@ -142,7 +142,7 @@ data/scenes/<scene>/
 conda activate mm26
 
 python -m src.tools.extract_features --scene configs/scenes/<scene>.yaml
-python -m src.tools.match_features --scene configs/scenes/<scene>.yaml --strategy retrieval --retrieval-top-k 20
+python -m src.tools.match_features --scene configs/scenes/<scene>.yaml --strategy exhaustive
 python -m src.tools.verify_matches --scene configs/scenes/<scene>.yaml
 python -m src.tools.initialize_reconstruction --scene configs/scenes/<scene>.yaml
 ```
@@ -152,20 +152,73 @@ python -m src.tools.initialize_reconstruction --scene configs/scenes/<scene>.yam
 ```bash
 python -m src.tools.run_paper_aligned_sfm \
   --scene configs/scenes/<scene>.yaml \
-  --max-register 50 \
+  --max-register 70 \
+  --strict-pnp-median-error 4.0 \
+  --max-pnp-median-error 6.0 \
+  --strict-pnp-mean-error 6.0 \
+  --max-pnp-mean-error 8 \
   --local-ba-after-registration \
+  --run-final-refinement \
   --global-ba-growth-ratio 1.3 \
   --global-ba-min-interval 4 \
-  --filter-after-ba \
+  --global-ba-max-iterations 40 \
+  --global-ba-max-points 0 \
+  --global-ba-max-observations 0 \
   --diagnose-degenerate-cameras \
-  --report-name paper_aligned_sfm_report.json
+  --report-name <scene>_paper_aligned_sfm_report.json
 ```
 
-导出 COLMAP sparse model：
+可选：仅当需要单独检查 COLMAP text sparse model 时使用导出命令；3DGS 交付推荐直接使用 `prepare_3dgs_from_sfm` 写入 `data/3dgs_inputs/<scene>_sfm/`。
 
 ```bash
 python -m src.tools.export_colmap_model --scene configs/scenes/<scene>.yaml
 ```
+
+### 3.1 默认设置策略
+
+本项目将 DTU 批量复现实验的默认参数**嵌入到 `scripts/run_sfm_full.ps1`**，README 只展示稳定复现路径；底层 Python CLI 仍保留完整接口，供消融实验或失败诊断时使用。
+
+默认脚本入口：
+
+```powershell
+.\scripts\run_sfm_full.ps1 -Scene dtu_scan55
+```
+
+默认设置包括：
+
+- matching 使用 `--strategy exhaustive`，适合当前即将运行的少图像 DTU scene。
+- 注册上限使用 `--max-register 70`。
+- PnP 接受阈值以当前 README 主命令为准：strict median `4.0`、strict mean `6.0`、soft median `6.0`、soft mean `8`。
+- 主控制器原生默认开启 failed image retry、track cache、BA 后 filtering、shared-focal optimization；默认命令不再显式传入这些开关。
+- 显式开启 `--local-ba-after-registration` 与 `--run-final-refinement`。
+- 全局 BA 使用增长触发：`--global-ba-growth-ratio 1.3`、`--global-ba-min-interval 4`、`--global-ba-max-iterations 40`。
+- 全局 BA 点数与观测数设为 `0`，表示不限制：`--global-ba-max-points 0`、`--global-ba-max-observations 0`。
+- `--diagnose-degenerate-cameras` 在默认脚本中显式开启，但不默认删除退化相机。
+- 报告名自动包含 scene：`<scene>_paper_aligned_sfm_report.json`，避免多场景实验互相覆盖。
+
+> **Advanced**  
+> 若需要查看或临时覆盖底层接口，直接运行 `python -m src.tools.<tool_name> --help`。普通复现实验不需要手动展开这些参数。
+
+**`python -m src.tools.prepare_3dgs_from_sfm`**：将 SfM 结果整理成 3DGS 可直接读取的 `images/ + sparse/0/` 目录。
+
+| 参数 | 含义 |
+| --- | --- |
+| `--scene` | 必填。scene 配置文件。 |
+| `--output-name` | 输出目录名；为空时默认 `<scene_name>_sfm`。 |
+| `--output-root` | 3DGS 输入根目录，默认 `data/3dgs_inputs`。 |
+| `--focal-scale` | 导出 COLMAP 相机时的焦距缩放系数，默认 `1.2`。 |
+| `--copy-images` | 复制图像到 3DGS source；脚本默认开启。 |
+| `--link-images` | 尽可能使用软链接代替复制，失败则回退复制。 |
+| `--skip-check` | 跳过 `check_3dgs_scene` 预检查。 |
+
+**`python -m src.tools.check_3dgs_scene`**：检查 3DGS source 是否满足 COLMAP text loader 要求。
+
+| 参数 | 含义 |
+| --- | --- |
+| `--source-path` | 必填。传给 3DGS `train.py -s` 的 scene 根目录。 |
+| `--images` | 图像子目录名，对应 3DGS `--images`，默认 `images`。 |
+| `--write-ply` | 若缺少 `points3D.ply`，从 `points3D.txt` 生成 ASCII PLY。 |
+| `--report-name` | 可选 JSON 检查报告路径。 |
 
 ### 4. 准备 3DGS 输入
 
@@ -174,8 +227,11 @@ SfM 分支：
 ```bash
 python -m src.tools.prepare_3dgs_from_sfm \
   --scene configs/scenes/<scene>.yaml \
+  --output-root data/3dgs_inputs \
   --output-name <scene>_sfm
 ```
+
+该命令会把 3DGS 所需的 `images/` 与 `sparse/0/` 统一写入 `data/3dgs_inputs/<scene>_sfm/`。不需要再在 `data/scenes/<scene>/` 下额外生成一份 3DGS 输入。
 
 VGGT 分支：
 
@@ -279,30 +335,22 @@ data/scenes/<scene>/images/
 configs/scenes/<scene>.yaml
 ```
 
-Run the main SfM pipeline:
+The current primary benchmark path is DTU, for example `dtu_scan55`, `dtu_scan65`, or `dtu_scan83`. The upcoming small-image scenes should use exhaustive matching by default.
 
-```bash
-python -m src.tools.extract_features --scene configs/scenes/<scene>.yaml
-python -m src.tools.match_features --scene configs/scenes/<scene>.yaml --strategy retrieval --retrieval-top-k 20
-python -m src.tools.verify_matches --scene configs/scenes/<scene>.yaml
-python -m src.tools.initialize_reconstruction --scene configs/scenes/<scene>.yaml
+Run the default SfM pipeline:
 
-python -m src.tools.run_paper_aligned_sfm \
-  --scene configs/scenes/<scene>.yaml \
-  --max-register 50 \
-  --local-ba-after-registration \
-  --global-ba-growth-ratio 1.3 \
-  --global-ba-min-interval 4 \
-  --filter-after-ba \
-  --diagnose-degenerate-cameras \
-  --report-name paper_aligned_sfm_report.json
+```powershell
+.\scripts\run_sfm_full.ps1 -Scene dtu_scan55
 ```
+
+The controller now enables failed-image retry, track cache, post-BA filtering, and shared-focal BA by default. The script adds the DTU run policy around it: exhaustive matching, `--max-register 70`, final refinement, scene-specific reports, and SfM-to-3DGS export under `data/3dgs_inputs/<scene>_sfm/`.
 
 Prepare 3DGS inputs:
 
 ```bash
 python -m src.tools.prepare_3dgs_from_sfm \
   --scene configs/scenes/<scene>.yaml \
+  --output-root data/3dgs_inputs \
   --output-name <scene>_sfm
 
 python -m src.tools.check_3dgs_scene \
@@ -321,6 +369,10 @@ python third_party/gaussian-splatting/train.py \
 python third_party/gaussian-splatting/render.py -m outputs/3dgs/<scene>_sfm
 python third_party/gaussian-splatting/metrics.py -m outputs/3dgs/<scene>_sfm
 ```
+
+## SfM Default Policy
+
+The default DTU reproduction settings are split between the controller defaults and `scripts/run_sfm_full.ps1`. Use the one-command PowerShell entry point for normal reproduction, and inspect `python -m src.tools.<tool_name> --help` only when running ablations or debugging failed scenes.
 
 ## Reproducibility Notes
 
