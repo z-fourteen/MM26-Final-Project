@@ -8,3 +8,8 @@ matplotlib>=3.7
 Pillow>=10.0
 PyYAML>=6.0
 tqdm>=4.66
+
+# Optional DISK + LightGlue frontend. Install the vendored official repo with:
+# python -m pip install -e third_party/LightGlue
+# On conda, ensure lzma is available first if torchvision import fails:
+# conda install -n mm26 -c conda-forge xz liblzma -y

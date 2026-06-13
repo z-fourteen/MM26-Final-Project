@@ -7,6 +7,12 @@ param(
     [int]$GlobalBaMinInterval = 4,
     [int]$DegenerateMinObservations = 20,
     [switch]$RemoveDegenerateCameras,
+    [ValidateSet("rootsift", "disk")]
+    [string]$FeatureBackend = "rootsift",
+    [ValidateSet("rootsift_bf", "lightglue")]
+    [string]$MatcherBackend = "rootsift_bf",
+    [string]$FeatureDevice = "auto",
+    [string]$MatcherDevice = "auto",
     [string]$ReportName = ""
 )
 
@@ -45,10 +51,15 @@ function Invoke-PythonStep {
 Write-Host "Running full SfM pipeline for scene: $Scene" -ForegroundColor Cyan
 Write-Host "Scene config: $SceneConfig"
 
-Invoke-PythonStep -m src.tools.extract_features --scene $SceneConfig
+Invoke-PythonStep -m src.tools.extract_features `
+    --scene $SceneConfig `
+    --feature-backend $FeatureBackend `
+    --device $FeatureDevice
 
 Invoke-PythonStep -m src.tools.match_features `
     --scene $SceneConfig `
+    --matcher-backend $MatcherBackend `
+    --device $MatcherDevice `
     --strategy exhaustive `
     --force
 

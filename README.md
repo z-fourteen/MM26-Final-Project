@@ -374,6 +374,30 @@ python third_party/gaussian-splatting/metrics.py -m outputs/3dgs/<scene>_sfm
 
 The default DTU reproduction settings are split between the controller defaults and `scripts/run_sfm_full.ps1`. Use the one-command PowerShell entry point for normal reproduction, and inspect `python -m src.tools.<tool_name> --help` only when running ablations or debugging failed scenes.
 
+## Optional DISK + LightGlue Frontend
+
+RootSIFT remains the default. To test the learned frontend/matcher path, install the official vendored LightGlue repo:
+
+```bash
+python -m pip install -e third_party/LightGlue
+```
+
+If `torchvision` fails because Python cannot import `lzma`, repair the conda runtime first:
+
+```bash
+conda install -n mm26 -c conda-forge xz liblzma -y
+```
+
+Run a scene with DISK features and LightGlue matching:
+
+```powershell
+.\scripts\run_sfm_full.ps1 `
+  -Scene dtu_scan83 `
+  -FeatureBackend disk `
+  -MatcherBackend lightglue `
+  -ReportName dtu_scan83_disk_lightglue_paper_aligned_sfm_report.json
+```
+
 ## Reproducibility Notes
 
 - Main CPU-friendly dependencies are listed in `requirements.txt`.

@@ -4,7 +4,19 @@ project:
 
 sfm:
   feature_type: rootsift
+  feature_backend: rootsift
+  matcher_backend: rootsift_bf
+  device: auto
   max_image_size: 1600
+  disk:
+    max_num_keypoints: 4096
+    detection_threshold: 0.0
+    nms_window_size: 5
+  lightglue:
+    features: disk
+    filter_threshold: 0.1
+    depth_confidence: 0.95
+    width_confidence: 0.99
   ratio_test: 0.8
   mutual_check: true
   min_num_matches: 30

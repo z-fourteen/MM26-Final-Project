@@ -14,15 +14,16 @@ from src.sfm.features import list_images
 from src.sfm.matching import (
     draw_match_preview,
     load_features,
-    match_feature_pair,
+    match_feature_pair_backend,
     pair_output_path,
     save_pair_matches,
 )
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Match RootSIFT features for a configured scene.")
+    parser = argparse.ArgumentParser(description="Match local features for a configured scene.")
     parser.add_argument("--scene", required=True, help="Path to configs/scenes/<scene>.yaml")
+    parser.add_argument("--matcher-backend", choices=["rootsift_bf", "lightglue"], default=None)
     parser.add_argument("--strategy", default="exhaustive", choices=["exhaustive", "sequential", "retrieval"])
     parser.add_argument("--sequential-window", type=int, default=10)
     parser.add_argument("--retrieval-top-k", type=int, default=20)
@@ -33,6 +34,10 @@ def main() -> int:
     parser.add_argument("--max-pairs", type=int, default=0, help="Optional cap for debugging; 0 means all pairs.")
     parser.add_argument("--preview-count", type=int, default=3)
     parser.add_argument("--force", action="store_true", help="Recompute existing match files.")
+    parser.add_argument("--device", default=None, help="Matcher device for learned matchers: auto, cpu, cuda.")
+    parser.add_argument("--lightglue-filter-threshold", type=float, default=None)
+    parser.add_argument("--lightglue-depth-confidence", type=float, default=None)
+    parser.add_argument("--lightglue-width-confidence", type=float, default=None)
     args = parser.parse_args()
 
     config = load_scene_config(args.scene)
@@ -47,9 +52,30 @@ def main() -> int:
     report_dir = output_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    ratio_test = float(default["sfm"].get("ratio_test", 0.8))
-    mutual_check = bool(default["sfm"].get("mutual_check", True))
-    min_num_matches = int(default["sfm"].get("min_num_matches", 30))
+    sfm_config = default["sfm"]
+    feature_backend = sfm_config.get("feature_backend", sfm_config.get("feature_type", "rootsift"))
+    matcher_backend = args.matcher_backend or sfm_config.get("matcher_backend", "rootsift_bf")
+    ratio_test = float(sfm_config.get("ratio_test", 0.8))
+    mutual_check = bool(sfm_config.get("mutual_check", True))
+    min_num_matches = int(sfm_config.get("min_num_matches", 30))
+    lightglue_config = sfm_config.get("lightglue", {})
+    device = args.device or sfm_config.get("device", lightglue_config.get("device", "auto"))
+    lightglue_features = str(lightglue_config.get("features", feature_backend))
+    lightglue_filter_threshold = (
+        args.lightglue_filter_threshold
+        if args.lightglue_filter_threshold is not None
+        else float(lightglue_config.get("filter_threshold", 0.1))
+    )
+    lightglue_depth_confidence = (
+        args.lightglue_depth_confidence
+        if args.lightglue_depth_confidence is not None
+        else float(lightglue_config.get("depth_confidence", 0.95))
+    )
+    lightglue_width_confidence = (
+        args.lightglue_width_confidence
+        if args.lightglue_width_confidence is not None
+        else float(lightglue_config.get("width_confidence", 0.99))
+    )
 
     images = list_images(image_dir)
     if len(images) < 2:
@@ -61,6 +87,18 @@ def main() -> int:
         raise FileNotFoundError("Missing feature files:\n" + "\n".join(missing_features[:10]))
 
     features = [load_features(path) for path in feature_paths]
+    incompatible_features = [
+        f"{feature.image_name}: {feature.feature_type}"
+        for feature in features
+        if matcher_backend == "lightglue" and feature.feature_type != lightglue_features
+    ]
+    if incompatible_features:
+        raise ValueError(
+            "LightGlue matcher requires matching feature files. "
+            f"Expected {lightglue_features}; examples:\n" + "\n".join(incompatible_features[:10])
+        )
+    if args.strategy == "retrieval" and matcher_backend == "lightglue":
+        raise ValueError("Retrieval pair generation is currently implemented for descriptor BoW; use exhaustive or sequential with LightGlue.")
     image_by_name = {image_path.name: image_path for image_path in images}
     feature_by_name = {feature.image_name: feature for feature in features}
     pair_scores: dict[tuple[int, int], float] = {}
@@ -87,13 +125,43 @@ def main() -> int:
 
         if output_path.exists() and not args.force:
             data = np.load(output_path)
-            num_matches = int(data["matches"].shape[0])
+            cached_matcher = str(data["matcher_backend"]) if "matcher_backend" in data.files else "rootsift_bf"
+            cached_feature_type1 = str(data["feature_type1"]) if "feature_type1" in data.files else "rootsift"
+            cached_feature_type2 = str(data["feature_type2"]) if "feature_type2" in data.files else "rootsift"
+            cache_is_compatible = (
+                cached_matcher == matcher_backend
+                and cached_feature_type1 == features[index1].feature_type
+                and cached_feature_type2 == features[index2].feature_type
+            )
+            if cache_is_compatible:
+                num_matches = int(data["matches"].shape[0])
+            else:
+                result = match_feature_pair_backend(
+                    features[index1],
+                    features[index2],
+                    matcher_backend=matcher_backend,
+                    ratio_test=ratio_test,
+                    mutual_check=mutual_check,
+                    lightglue_features=lightglue_features,
+                    lightglue_filter_threshold=lightglue_filter_threshold,
+                    lightglue_depth_confidence=lightglue_depth_confidence,
+                    lightglue_width_confidence=lightglue_width_confidence,
+                    device=device,
+                )
+                save_pair_matches(result, output_path)
+                num_matches = result.num_matches
         else:
-            result = match_feature_pair(
+            result = match_feature_pair_backend(
                 features[index1],
                 features[index2],
+                matcher_backend=matcher_backend,
                 ratio_test=ratio_test,
                 mutual_check=mutual_check,
+                lightglue_features=lightglue_features,
+                lightglue_filter_threshold=lightglue_filter_threshold,
+                lightglue_depth_confidence=lightglue_depth_confidence,
+                lightglue_width_confidence=lightglue_width_confidence,
+                device=device,
             )
             save_pair_matches(result, output_path)
             num_matches = result.num_matches
@@ -126,6 +194,9 @@ def main() -> int:
 
     report = {
         "scene_name": scene["scene_name"],
+        "feature_backend": feature_backend,
+        "matcher_backend": matcher_backend,
+        "device": device,
         "strategy": args.strategy,
         "sequential_window": args.sequential_window,
         "retrieval": retrieval_summary,
@@ -133,6 +204,12 @@ def main() -> int:
         "num_pairs": len(pairs),
         "ratio_test": ratio_test,
         "mutual_check": mutual_check,
+        "lightglue": {
+            "features": lightglue_features,
+            "filter_threshold": lightglue_filter_threshold,
+            "depth_confidence": lightglue_depth_confidence,
+            "width_confidence": lightglue_width_confidence,
+        },
         "min_num_matches": min_num_matches,
         "min_matches": int(counts.min()) if len(counts) else 0,
         "mean_matches": float(counts.mean()) if len(counts) else 0.0,
@@ -145,6 +222,7 @@ def main() -> int:
 
     print(f"Scene: {scene['scene_name']}")
     print(f"Images: {len(images)}")
+    print(f"Matcher backend: {matcher_backend}")
     print(f"Pairs: {len(pairs)}")
     print(f"Matches min/mean/max: {report['min_matches']} / {report['mean_matches']:.1f} / {report['max_matches']}")
     print(f"Pairs >= {min_num_matches}: {report['num_pairs_ge_min_matches']}")
@@ -218,7 +296,8 @@ def sample_descriptors_by_image(features: list, max_descriptors_per_image: int, 
     for image_features in features:
         descriptors = image_features.descriptors.astype(np.float32, copy=False)
         if descriptors.size == 0:
-            sampled.append(descriptors.reshape(0, 128))
+            descriptor_dim = int(descriptors.shape[1]) if descriptors.ndim == 2 else 0
+            sampled.append(descriptors.reshape(0, descriptor_dim))
             continue
         limit = min(max(int(max_descriptors_per_image), 1), int(descriptors.shape[0]))
         if descriptors.shape[0] > limit:

@@ -2,15 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 import cv2
 import numpy as np
+
+
+_LIGHTGLUE_MATCHER_CACHE: dict[tuple, object] = {}
 
 
 @dataclass(frozen=True)
 class ImageFeatures:
     image_name: str
     feature_path: Path
+    feature_type: str
+    image_size: tuple[int, int]
     keypoints: np.ndarray
     descriptors: np.ndarray
 
@@ -24,6 +30,9 @@ class PairMatchResult:
     matches: np.ndarray
     distances: np.ndarray
     ratios: np.ndarray
+    feature_type1: str = "rootsift"
+    feature_type2: str = "rootsift"
+    matcher_backend: str = "rootsift_bf"
 
     @property
     def num_matches(self) -> int:
@@ -32,9 +41,12 @@ class PairMatchResult:
 
 def load_features(feature_path: Path) -> ImageFeatures:
     data = np.load(feature_path)
+    image_size = data["image_size"].astype(np.int32, copy=False) if "image_size" in data.files else np.array([0, 0])
     return ImageFeatures(
         image_name=str(data["image_name"]),
         feature_path=feature_path,
+        feature_type=str(data["feature_type"]) if "feature_type" in data.files else "rootsift",
+        image_size=(int(image_size[0]), int(image_size[1])),
         keypoints=data["keypoints"].astype(np.float32, copy=False),
         descriptors=data["descriptors"].astype(np.float32, copy=False),
     )
@@ -79,7 +91,144 @@ def match_feature_pair(
         matches=forward_matches.astype(np.int32, copy=False),
         distances=forward_distances.astype(np.float32, copy=False),
         ratios=forward_ratios.astype(np.float32, copy=False),
+        feature_type1=features1.feature_type,
+        feature_type2=features2.feature_type,
+        matcher_backend="rootsift_bf",
     )
+
+
+def _resolve_torch_device(device: str):
+    import torch
+
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
+
+
+def _import_lightglue_symbol(name: str):
+    try:
+        import lightglue
+    except ModuleNotFoundError:
+        repo_root = Path(__file__).resolve().parents[2]
+        local_lightglue = repo_root / "third_party" / "LightGlue"
+        if local_lightglue.exists():
+            sys.path.insert(0, str(local_lightglue))
+            import lightglue
+        else:
+            raise ModuleNotFoundError(
+                "Official LightGlue is not importable. Install it with "
+                "`python -m pip install -e third_party/LightGlue`."
+            )
+    return getattr(lightglue, name)
+
+
+def match_feature_pair_lightglue(
+    features1: ImageFeatures,
+    features2: ImageFeatures,
+    lightglue_features: str = "disk",
+    filter_threshold: float = 0.1,
+    depth_confidence: float = 0.95,
+    width_confidence: float = 0.99,
+    device: str = "auto",
+) -> PairMatchResult:
+    import torch
+
+    if features1.feature_type != lightglue_features or features2.feature_type != lightglue_features:
+        raise ValueError(
+            "LightGlue matcher feature mismatch: "
+            f"expected {lightglue_features}, got {features1.feature_type} and {features2.feature_type}"
+        )
+
+    torch_device = _resolve_torch_device(device)
+    cache_key = (
+        str(torch_device),
+        lightglue_features,
+        float(filter_threshold),
+        float(depth_confidence),
+        float(width_confidence),
+    )
+    matcher = _LIGHTGLUE_MATCHER_CACHE.get(cache_key)
+    if matcher is None:
+        LightGlue = _import_lightglue_symbol("LightGlue")
+        matcher = LightGlue(
+            features=lightglue_features,
+            filter_threshold=float(filter_threshold),
+            depth_confidence=float(depth_confidence),
+            width_confidence=float(width_confidence),
+        ).eval().to(torch_device)
+        _LIGHTGLUE_MATCHER_CACHE[cache_key] = matcher
+
+    with torch.no_grad():
+        data = {
+            "image0": _features_to_lightglue_dict(features1, torch_device),
+            "image1": _features_to_lightglue_dict(features2, torch_device),
+        }
+        output = matcher(data)
+
+    matches_tensor = output["matches"][0] if isinstance(output["matches"], list) else output["matches"][0]
+    scores_tensor = output["scores"][0] if isinstance(output["scores"], list) else output["scores"][0]
+    matches = matches_tensor.detach().cpu().numpy().astype(np.int32, copy=False)
+    scores = scores_tensor.detach().cpu().numpy().astype(np.float32, copy=False)
+    distances = (1.0 - scores).astype(np.float32, copy=False)
+
+    return PairMatchResult(
+        image_name1=features1.image_name,
+        image_name2=features2.image_name,
+        feature_path1=features1.feature_path,
+        feature_path2=features2.feature_path,
+        matches=matches,
+        distances=distances,
+        ratios=scores,
+        feature_type1=features1.feature_type,
+        feature_type2=features2.feature_type,
+        matcher_backend="lightglue",
+    )
+
+
+def match_feature_pair_backend(
+    features1: ImageFeatures,
+    features2: ImageFeatures,
+    matcher_backend: str = "rootsift_bf",
+    ratio_test: float = 0.8,
+    mutual_check: bool = True,
+    lightglue_features: str = "disk",
+    lightglue_filter_threshold: float = 0.1,
+    lightglue_depth_confidence: float = 0.95,
+    lightglue_width_confidence: float = 0.99,
+    device: str = "auto",
+) -> PairMatchResult:
+    normalized_backend = matcher_backend.lower()
+    if normalized_backend in {"rootsift_bf", "bf"}:
+        return match_feature_pair(
+            features1,
+            features2,
+            ratio_test=ratio_test,
+            mutual_check=mutual_check,
+        )
+    if normalized_backend == "lightglue":
+        return match_feature_pair_lightglue(
+            features1,
+            features2,
+            lightglue_features=lightglue_features,
+            filter_threshold=lightglue_filter_threshold,
+            depth_confidence=lightglue_depth_confidence,
+            width_confidence=lightglue_width_confidence,
+            device=device,
+        )
+    raise ValueError(f"Unsupported matcher backend: {matcher_backend}")
+
+
+def _features_to_lightglue_dict(features: ImageFeatures, device) -> dict:
+    import torch
+
+    keypoints = torch.from_numpy(features.keypoints[:, :2].astype(np.float32, copy=False))[None].to(device)
+    descriptors = torch.from_numpy(features.descriptors.astype(np.float32, copy=False))[None].to(device)
+    image_size = torch.tensor(features.image_size, dtype=torch.float32, device=device)[None]
+    return {
+        "keypoints": keypoints,
+        "descriptors": descriptors,
+        "image_size": image_size,
+    }
 
 
 def _ratio_match(
@@ -134,6 +283,9 @@ def save_pair_matches(result: PairMatchResult, output_path: Path) -> None:
         matches=result.matches,
         distances=result.distances,
         ratios=result.ratios,
+        matcher_backend=result.matcher_backend,
+        feature_type1=result.feature_type1,
+        feature_type2=result.feature_type2,
     )
 
 

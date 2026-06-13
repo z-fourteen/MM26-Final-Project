@@ -214,16 +214,54 @@ The `--global-ba-min-interval` option prevents small early reconstructions from
 running global refinement after every newly registered image. Local BA remains the
 high-frequency stabilizer; global refinement is reserved for larger model growth.
 
-## 7. Matching and Export Notes
+## 7. Frontend, Matching, and Export Notes
 
-The RootSIFT NPZ pipeline supports exhaustive, sequential, and retrieval pair
-generation through `src.tools.match_features`. The retrieval mode is compatible with
-the current project pipeline: it builds a lightweight visual-word TF-IDF index from
-the existing `features/*.npz`, selects top-k image pairs, and still writes the same
-`matches/*.npz` files consumed by verification:
+The default frontend remains RootSIFT with brute-force ratio matching:
+
+```bash
+python -m src.tools.extract_features --scene configs/scenes/<scene>.yaml \
+  --feature-backend rootsift
+
+python -m src.tools.match_features --scene configs/scenes/<scene>.yaml \
+  --matcher-backend rootsift_bf \
+  --strategy exhaustive
+```
+
+The feature and matcher stages are now backend-selectable. The DISK + LightGlue path
+uses the official vendored LightGlue repository and still writes the same project
+NPZ feature and match files consumed by geometric verification:
+
+```bash
+python -m pip install -e third_party/LightGlue
+
+python -m src.tools.extract_features --scene configs/scenes/<scene>.yaml \
+  --feature-backend disk \
+  --force
+
+python -m src.tools.match_features --scene configs/scenes/<scene>.yaml \
+  --matcher-backend lightglue \
+  --strategy exhaustive \
+  --force
+```
+
+When using the one-command PowerShell pipeline:
+
+```powershell
+.\scripts\run_sfm_full.ps1 `
+  -Scene dtu_scan83 `
+  -FeatureBackend disk `
+  -MatcherBackend lightglue `
+  -ReportName dtu_scan83_disk_lightglue_paper_aligned_sfm_report.json
+```
+
+The RootSIFT NPZ pipeline also supports retrieval pair generation through
+`src.tools.match_features`. The retrieval mode builds a lightweight visual-word
+TF-IDF index from the existing `features/*.npz`, selects top-k image pairs, and still
+writes the same `matches/*.npz` files consumed by verification:
 
 ```bash
 python -m src.tools.match_features --scene configs/scenes/<scene>.yaml \
+  --matcher-backend rootsift_bf \
   --strategy retrieval \
   --retrieval-top-k 20 \
   --retrieval-num-words 256
