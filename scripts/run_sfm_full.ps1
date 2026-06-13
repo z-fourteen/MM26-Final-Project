@@ -49,9 +49,10 @@ Invoke-PythonStep -m src.tools.extract_features --scene $SceneConfig
 
 Invoke-PythonStep -m src.tools.match_features `
     --scene $SceneConfig `
-    --strategy exhaustive
+    --strategy exhaustive `
+    --force
 
-Invoke-PythonStep -m src.tools.verify_matches --scene $SceneConfig
+Invoke-PythonStep -m src.tools.verify_matches --scene $SceneConfig --force
 
 Invoke-PythonStep -m src.tools.initialize_reconstruction --scene $SceneConfig
 

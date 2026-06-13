@@ -145,6 +145,12 @@ def initialize_two_view(
     data = np.load(verified_path)
     F = data["F"].astype(np.float64)
     inlier_matches = data["inlier_matches"].astype(np.int32)
+    validate_inlier_matches(
+        inlier_matches=inlier_matches,
+        keypoints1=keypoints1,
+        keypoints2=keypoints2,
+        verified_path=verified_path,
+    )
     points1 = keypoints1[inlier_matches[:, 0], :2].astype(np.float64)
     points2 = keypoints2[inlier_matches[:, 1], :2].astype(np.float64)
 
@@ -203,6 +209,27 @@ def initialize_two_view(
         cheirality_ratio=cheirality_ratio,
         median_triangulation_angle_deg=median_angle,
     )
+
+
+def validate_inlier_matches(
+    *,
+    inlier_matches: np.ndarray,
+    keypoints1: np.ndarray,
+    keypoints2: np.ndarray,
+    verified_path: Path,
+) -> None:
+    if inlier_matches.size == 0:
+        return
+    max_idx1 = int(np.max(inlier_matches[:, 0]))
+    max_idx2 = int(np.max(inlier_matches[:, 1]))
+    min_idx = int(np.min(inlier_matches))
+    if min_idx < 0 or max_idx1 >= int(keypoints1.shape[0]) or max_idx2 >= int(keypoints2.shape[0]):
+        raise ValueError(
+            "Verified matches are incompatible with current feature files. "
+            f"Recompute matches and verification with --force. Path: {verified_path}; "
+            f"match index ranges=({min_idx}, {max_idx1}, {max_idx2}); "
+            f"keypoint counts=({keypoints1.shape[0]}, {keypoints2.shape[0]})."
+        )
 
 
 def initialization_succeeds(

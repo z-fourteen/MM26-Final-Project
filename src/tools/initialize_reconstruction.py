@@ -111,16 +111,34 @@ def main() -> int:
             ),
         )
 
-        candidate_result = initialize_two_view(
-            edge=edge,
-            verified_path=verified_path,
-            keypoints1=features1.keypoints,
-            keypoints2=features2.keypoints,
-            camera1=camera1,
-            camera2=camera2,
-            image1_rgb=image1_rgb,
-            max_reproj_error_px=float(default["sfm"].get("max_reproj_error_px", 8.0)),
-        )
+        try:
+            candidate_result = initialize_two_view(
+                edge=edge,
+                verified_path=verified_path,
+                keypoints1=features1.keypoints,
+                keypoints2=features2.keypoints,
+                camera1=camera1,
+                camera2=camera2,
+                image1_rgb=image1_rgb,
+                max_reproj_error_px=float(default["sfm"].get("max_reproj_error_px", 8.0)),
+            )
+        except ValueError as exc:
+            attempts.append(
+                {
+                    **summarize_candidate(edge, rank=rank),
+                    "status": "initialization_failed",
+                    "failure_reason": str(exc),
+                    "candidate_points": 0,
+                    "kept_points": 0,
+                    "kept_ratio": 0.0,
+                    "cheirality_ratio": 0.0,
+                    "pose_inliers": 0,
+                    "median_reprojection_error": 0.0,
+                    "mean_reprojection_error": 0.0,
+                    "median_initial_triangulation_angle_deg": 0.0,
+                }
+            )
+            continue
         median_error = (
             float(np.median(candidate_result.reprojection_errors))
             if candidate_result.reprojection_errors.size
