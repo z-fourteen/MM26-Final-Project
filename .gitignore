@@ -58,3 +58,11 @@ vggt_old_backup/
 !data/scenes/*/sparse/
 !data/scenes/*/sparse/0/
 !data/scenes/*/sparse/0/.gitkeep
+
+# pjj_ local repo adaptation
+
+main.tex 
+.claude/
+gaussian-splatting/
+vggt/
+dtu.tar.gz/
