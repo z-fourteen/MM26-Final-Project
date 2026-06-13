@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3DGS Camera Pose Viewer</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #080b10;
+      color: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    #app { position: relative; width: 100%; height: 100%; background: radial-gradient(circle at center, #172033 0, #080b10 62%); }
+    #canvas-root { position: absolute; inset: 0; }
+    .panel {
+      position: absolute;
+      z-index: 10;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 10px;
+      background: rgba(10, 15, 24, 0.86);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(10px);
+    }
+    #toolbar { top: 12px; left: 12px; width: min(390px, calc(100% - 24px)); padding: 12px; }
+    #scene-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    #scene-meta { color: #94a3b8; font-size: 12px; margin-bottom: 10px; }
+    .control-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .control-row > label { min-width: 74px; color: #cbd5e1; font-size: 12px; }
+    select, button, input[type="range"] {
+      min-width: 0;
+      border: 1px solid #334155;
+      border-radius: 7px;
+      background: #111827;
+      color: #e5e7eb;
+    }
+    select { flex: 1; padding: 7px 8px; }
+    button { padding: 7px 10px; cursor: pointer; }
+    button:hover { background: #1e293b; border-color: #64748b; }
+    input[type="range"] { flex: 1; accent-color: #38bdf8; }
+    .toggle-row { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 10px; font-size: 12px; }
+    .toggle-row label { display: flex; align-items: center; gap: 5px; }
+    .button-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 10px; }
+    #camera-info { right: 12px; bottom: 12px; width: min(360px, calc(100% - 24px)); padding: 10px 12px; font-size: 12px; line-height: 1.55; }
+    #camera-info strong { color: #7dd3fc; }
+    #status { left: 12px; bottom: 12px; max-width: min(520px, calc(100% - 24px)); padding: 8px 11px; font-size: 12px; color: #cbd5e1; }
+    #status.error { color: #fecaca; border-color: rgba(248, 113, 113, 0.5); }
+    #loading {
+      position: absolute; inset: 0; z-index: 20; display: grid; place-items: center;
+      pointer-events: none; background: rgba(3, 7, 18, 0.3); font-size: 14px;
+    }
+    #loading.hidden { display: none; }
+    @media (max-width: 760px) {
+      #toolbar { width: calc(100% - 24px); }
+      #camera-info { display: none; }
+      #status { right: 12px; max-width: none; }
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/viewer-assets/vendor/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <main id="app">
+    <div id="canvas-root"></div>
+    <section id="toolbar" class="panel">
+      <div id="scene-title">正在读取场景</div>
+      <div id="scene-meta"></div>
+      <div class="control-row">
+        <label for="camera-select">当前相机</label>
+        <select id="camera-select"></select>
+      </div>
+      <div class="control-row">
+        <label for="splat-scale">高斯尺寸</label>
+        <input id="splat-scale" type="range" min="0.2" max="2.5" step="0.05" value="1">
+        <span id="splat-scale-value">1.00</span>
+      </div>
+      <div class="toggle-row">
+        <label><input id="show-centers" type="checkbox" checked> 相机中心</label>
+        <label><input id="show-track" type="checkbox" checked> 相机轨迹</label>
+        <label><input id="show-frustums" type="checkbox" checked> 相机视锥</label>
+        <label><input id="point-mode" type="checkbox"> 点模式</label>
+      </div>
+      <div class="button-row">
+        <button id="prev-camera">上一相机</button>
+        <button id="enter-camera">进入视角</button>
+        <button id="next-camera">下一相机</button>
+      </div>
+      <div class="button-row">
+        <button id="reset-view">全局视角</button>
+        <button id="toggle-up">切换 Y 轴</button>
+        <button id="fullscreen">全屏</button>
+      </div>
+    </section>
+    <section id="camera-info" class="panel">尚未加载相机参数。</section>
+    <section id="status" class="panel">初始化 WebGL 查看器...</section>
+    <div id="loading">正在加载 3D Gaussian Splatting 数据，请稍候...</div>
+  </main>
+
+  <script type="module">
+    import * as THREE from "three";
+    import * as GaussianSplats3D from "/viewer-assets/vendor/gaussian-splats-3d.module.js";
+
+    const elements = {
+      app: document.querySelector("#app"),
+      root: document.querySelector("#canvas-root"),
+      title: document.querySelector("#scene-title"),
+      meta: document.querySelector("#scene-meta"),
+      status: document.querySelector("#status"),
+      loading: document.querySelector("#loading"),
+      cameraSelect: document.querySelector("#camera-select"),
+      cameraInfo: document.querySelector("#camera-info"),
+      showCenters: document.querySelector("#show-centers"),
+      showTrack: document.querySelector("#show-track"),
+      showFrustums: document.querySelector("#show-frustums"),
+      pointMode: document.querySelector("#point-mode"),
+      splatScale: document.querySelector("#splat-scale"),
+      splatScaleValue: document.querySelector("#splat-scale-value"),
+    };
+
+    let viewer = null;
+    let sceneData = null;
+    let cameraCenterPoints = null;
+    let trajectoryLine = null;
+    let frustumLines = null;
+    let directionLines = null;
+    let selectedFrustum = null;
+    let selectedCameraMarker = null;
+    let overview = null;
+    let selectedIndex = 0;
+    let invertUp = false;
+
+    function setStatus(message, isError = false) {
+      elements.status.textContent = message;
+      elements.status.classList.toggle("error", isError);
+    }
+
+    function vectorFrom(values) {
+      return new THREE.Vector3(values[0], values[1], values[2]);
+    }
+
+    function applyCameraRotation(vector, rotation) {
+      const matrix = new THREE.Matrix3();
+      matrix.set(
+        rotation[0][0], rotation[0][1], rotation[0][2],
+        rotation[1][0], rotation[1][1], rotation[1][2],
+        rotation[2][0], rotation[2][1], rotation[2][2],
+      );
+      return vector.applyMatrix3(matrix);
+    }
+
+    function cameraBounds(cameras) {
+      if (!cameras.length) {
+        return { center: new THREE.Vector3(0, 0, 0), radius: 4 };
+      }
+      const box = new THREE.Box3();
+      cameras.forEach((camera) => box.expandByPoint(vectorFrom(camera.position)));
+      const center = box.getCenter(new THREE.Vector3());
+      const radius = Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 0.5);
+      return { center, radius };
+    }
+
+    function createCameraObjects(cameras, bounds, threeScene) {
+      if (!cameras.length) return;
+      const positions = cameras.flatMap((camera) => camera.position);
+      const pointGeometry = new THREE.BufferGeometry();
+      pointGeometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      cameraCenterPoints = new THREE.Points(
+        pointGeometry,
+        new THREE.PointsMaterial({ color: 0x38bdf8, size: Math.max(bounds.radius * 0.012, 0.012), sizeAttenuation: true }),
+      );
+      cameraCenterPoints.renderOrder = 20;
+      threeScene.add(cameraCenterPoints);
+
+      const trackGeometry = new THREE.BufferGeometry();
+      trackGeometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      trajectoryLine = new THREE.Line(
+        trackGeometry,
+        new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.7 }),
+      );
+      trajectoryLine.renderOrder = 19;
+      threeScene.add(trajectoryLine);
+
+      const frustumVertices = [];
+      const directionVertices = [];
+      const depth = Math.max(bounds.radius * 0.085, 0.06);
+      for (const camera of cameras) {
+        if (!camera.rotation) continue;
+        const width = camera.width || 1;
+        const height = camera.height || 1;
+        const fx = camera.fx || width;
+        const fy = camera.fy || height;
+        const cx = camera.cx ?? width * 0.5;
+        const cy = camera.cy ?? height * 0.5;
+        const origin = vectorFrom(camera.position);
+        const forwardEnd = applyCameraRotation(new THREE.Vector3(0, 0, depth * 1.8), camera.rotation).add(origin);
+        directionVertices.push(...origin.toArray(), ...forwardEnd.toArray());
+        const corners = [
+          [0, 0], [width, 0], [width, height], [0, height],
+        ].map(([u, v]) => {
+          const local = new THREE.Vector3((u - cx) / fx * depth, (v - cy) / fy * depth, depth);
+          return applyCameraRotation(local, camera.rotation).add(origin);
+        });
+        for (const corner of corners) frustumVertices.push(...origin.toArray(), ...corner.toArray());
+        for (let index = 0; index < 4; index += 1) {
+          frustumVertices.push(...corners[index].toArray(), ...corners[(index + 1) % 4].toArray());
+        }
+      }
+      const frustumGeometry = new THREE.BufferGeometry();
+      frustumGeometry.setAttribute("position", new THREE.Float32BufferAttribute(frustumVertices, 3));
+      frustumLines = new THREE.LineSegments(
+        frustumGeometry,
+        new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.42 }),
+      );
+      frustumLines.renderOrder = 18;
+      threeScene.add(frustumLines);
+
+      const directionGeometry = new THREE.BufferGeometry();
+      directionGeometry.setAttribute("position", new THREE.Float32BufferAttribute(directionVertices, 3));
+      directionLines = new THREE.LineSegments(
+        directionGeometry,
+        new THREE.LineBasicMaterial({ color: 0xfb923c, transparent: true, opacity: 0.9 }),
+      );
+      directionLines.renderOrder = 21;
+      threeScene.add(directionLines);
+
+      selectedCameraMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(Math.max(bounds.radius * 0.025, 0.025), 16, 12),
+        new THREE.MeshBasicMaterial({ color: 0xf43f5e }),
+      );
+      selectedCameraMarker.renderOrder = 25;
+      threeScene.add(selectedCameraMarker);
+
+      selectedFrustum = new THREE.LineSegments(
+        new THREE.BufferGeometry(),
+        new THREE.LineBasicMaterial({ color: 0xf43f5e }),
+      );
+      selectedFrustum.renderOrder = 26;
+      threeScene.add(selectedFrustum);
+    }
+
+    function frustumVerticesForCamera(camera, depth) {
+      if (!camera.rotation) return [];
+      const width = camera.width || 1;
+      const height = camera.height || 1;
+      const fx = camera.fx || width;
+      const fy = camera.fy || height;
+      const cx = camera.cx ?? width * 0.5;
+      const cy = camera.cy ?? height * 0.5;
+      const origin = vectorFrom(camera.position);
+      const corners = [[0, 0], [width, 0], [width, height], [0, height]].map(([u, v]) => {
+        const local = new THREE.Vector3((u - cx) / fx * depth, (v - cy) / fy * depth, depth);
+        return applyCameraRotation(local, camera.rotation).add(origin);
+      });
+      const vertices = [];
+      for (const corner of corners) vertices.push(...origin.toArray(), ...corner.toArray());
+      for (let index = 0; index < 4; index += 1) {
+        vertices.push(...corners[index].toArray(), ...corners[(index + 1) % 4].toArray());
+      }
+      const forwardEnd = applyCameraRotation(new THREE.Vector3(0, 0, depth * 2.2), camera.rotation).add(origin);
+      vertices.push(...origin.toArray(), ...forwardEnd.toArray());
+      return vertices;
+    }
+
+    function updateVisibility() {
+      if (cameraCenterPoints) cameraCenterPoints.visible = elements.showCenters.checked;
+      if (trajectoryLine) trajectoryLine.visible = elements.showTrack.checked;
+      if (frustumLines) frustumLines.visible = elements.showFrustums.checked;
+      if (directionLines) directionLines.visible = elements.showFrustums.checked;
+      if (selectedFrustum) selectedFrustum.visible = elements.showFrustums.checked;
+    }
+
+    function updateSelectedCamera(index, navigateToView = true) {
+      const cameras = sceneData?.cameras || [];
+      if (!cameras.length) return;
+      selectedIndex = (index + cameras.length) % cameras.length;
+      elements.cameraSelect.value = String(selectedIndex);
+      const camera = cameras[selectedIndex];
+      if (selectedCameraMarker) selectedCameraMarker.position.fromArray(camera.position);
+      if (selectedFrustum) {
+        selectedFrustum.geometry.dispose();
+        selectedFrustum.geometry = new THREE.BufferGeometry();
+        selectedFrustum.geometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(frustumVerticesForCamera(camera, Math.max(overview.radius * 0.14, 0.1)), 3),
+        );
+      }
+      const position = camera.position.map((value) => Number(value).toFixed(5)).join(", ");
+      const orientation = camera.rotation ? "包含相机朝向" : "仅有相机中心";
+      const intrinsics = camera.fx && camera.fy ? `fx=${camera.fx.toFixed(2)}, fy=${camera.fy.toFixed(2)}` : "未提供内参";
+      elements.cameraInfo.innerHTML =
+        `<strong>${camera.name}</strong><br>` +
+        `序号：${selectedIndex + 1} / ${cameras.length}<br>` +
+        `位置：[${position}]<br>${orientation}<br>${intrinsics}`;
+      if (navigateToView && camera.rotation) enterSelectedCamera();
+    }
+
+    function enterSelectedCamera() {
+      const cameraData = sceneData?.cameras?.[selectedIndex];
+      if (!cameraData || !viewer) return;
+      if (!cameraData.rotation) {
+        setStatus("该相机文件只有中心坐标，无法进入真实相机朝向。", true);
+        return;
+      }
+      const position = vectorFrom(cameraData.position);
+      const forward = applyCameraRotation(new THREE.Vector3(0, 0, 1), cameraData.rotation).normalize();
+      const up = applyCameraRotation(new THREE.Vector3(0, -1, 0), cameraData.rotation).normalize();
+      const target = position.clone().addScaledVector(forward, Math.max(overview.radius * 0.2, 0.2));
+      viewer.camera.position.copy(position);
+      viewer.camera.up.copy(up);
+      viewer.camera.lookAt(target);
+      if (viewer.controls) {
+        viewer.controls.target.copy(target);
+        viewer.controls.update();
+      }
+      if (cameraData.height && cameraData.fy && viewer.camera.isPerspectiveCamera) {
+        viewer.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(cameraData.height / (2 * cameraData.fy)));
+        viewer.camera.updateProjectionMatrix();
+      }
+      setStatus(`已进入相机视角：${cameraData.name}`);
+    }
+
+    function resetView() {
+      if (!viewer || !overview) return;
+      const direction = new THREE.Vector3(1.1, invertUp ? -0.65 : 0.65, 1.35).normalize();
+      viewer.camera.position.copy(overview.center).addScaledVector(direction, overview.radius * 2.4);
+      viewer.camera.up.set(0, invertUp ? -1 : 1, 0);
+      viewer.camera.lookAt(overview.center);
+      if (viewer.controls) {
+        viewer.controls.target.copy(overview.center);
+        viewer.controls.update();
+      }
+      setStatus("已恢复全局相机轨迹视角。");
+    }
+
+    async function initialize() {
+      const sceneId = new URLSearchParams(window.location.search).get("scene");
+      if (!sceneId) throw new Error("URL 中缺少 scene 参数");
+      const response = await fetch(`/api/scenes/${encodeURIComponent(sceneId)}`);
+      if (!response.ok) throw new Error(`场景元数据读取失败：HTTP ${response.status}`);
+      sceneData = await response.json();
+      const cameras = sceneData.cameras || [];
+      overview = cameraBounds(cameras);
+      elements.title.textContent = `${sceneData.method} · ${sceneData.label}`;
+      elements.meta.textContent = `${sceneData.ply.vertex_count.toLocaleString()} 个高斯 · ${cameras.length} 个相机`;
+
+      elements.cameraSelect.innerHTML = "";
+      cameras.forEach((camera, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = `${String(index + 1).padStart(3, "0")} · ${camera.name}`;
+        elements.cameraSelect.appendChild(option);
+      });
+      if (!cameras.length) {
+        const option = document.createElement("option");
+        option.textContent = "未加载相机参数";
+        elements.cameraSelect.appendChild(option);
+        elements.cameraSelect.disabled = true;
+      }
+
+      const threeScene = new THREE.Scene();
+      createCameraObjects(cameras, overview, threeScene);
+      const initialPosition = overview.center.clone().add(
+        new THREE.Vector3(1.1, 0.65, 1.35).normalize().multiplyScalar(overview.radius * 2.4),
+      );
+      viewer = new GaussianSplats3D.Viewer({
+        rootElement: elements.root,
+        threeScene,
+        cameraUp: [0, 1, 0],
+        initialCameraPosition: initialPosition.toArray(),
+        initialCameraLookAt: overview.center.toArray(),
+        sharedMemoryForWorkers: false,
+        gpuAcceleratedSort: false,
+        integerBasedSort: false,
+        halfPrecisionCovariancesOnGPU: true,
+        inMemoryCompressionLevel: 1,
+        sphericalHarmonicsDegree: 0,
+        antialiased: false,
+      });
+      setStatus(`正在读取 ${sceneData.ply.file_name}...`);
+      await viewer.addSplatScene(sceneData.model_url, {
+        splatAlphaRemovalThreshold: 5,
+        showLoadingUI: true,
+        progressiveLoad: true,
+      });
+      viewer.start();
+      elements.loading.classList.add("hidden");
+      updateVisibility();
+      if (cameras.length) updateSelectedCamera(0, true);
+      setStatus("加载完成。左键旋转，右键平移，滚轮缩放。快捷键 P 可切换点模式。");
+    }
+
+    elements.cameraSelect.addEventListener("change", (event) => updateSelectedCamera(Number(event.target.value)));
+    document.querySelector("#prev-camera").addEventListener("click", () => updateSelectedCamera(selectedIndex - 1));
+    document.querySelector("#next-camera").addEventListener("click", () => updateSelectedCamera(selectedIndex + 1));
+    document.querySelector("#enter-camera").addEventListener("click", enterSelectedCamera);
+    document.querySelector("#reset-view").addEventListener("click", resetView);
+    document.querySelector("#toggle-up").addEventListener("click", () => { invertUp = !invertUp; resetView(); });
+    document.querySelector("#fullscreen").addEventListener("click", () => elements.app.requestFullscreen());
+    [elements.showCenters, elements.showTrack, elements.showFrustums].forEach((element) => {
+      element.addEventListener("change", updateVisibility);
+    });
+    elements.pointMode.addEventListener("change", () => {
+      if (viewer?.splatMesh) viewer.splatMesh.setPointCloudModeEnabled(elements.pointMode.checked);
+    });
+    elements.splatScale.addEventListener("input", () => {
+      const value = Number(elements.splatScale.value);
+      elements.splatScaleValue.textContent = value.toFixed(2);
+      if (viewer?.splatMesh) viewer.splatMesh.setSplatScale(value);
+    });
+
+    initialize().catch((error) => {
+      console.error(error);
+      elements.loading.classList.add("hidden");
+      setStatus(error.message || String(error), true);
+    });
+  </script>
+</body>
+</html>

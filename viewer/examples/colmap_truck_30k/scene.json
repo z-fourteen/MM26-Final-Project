@@ -1,0 +1,13 @@
+{
+  "id": "colmap_truck_30k",
+  "name": "COLMAP baseline · Truck · 30K",
+  "method": "COLMAP",
+  "ply": "point_cloud.ply",
+  "cameras": "cameras.json",
+  "ply_bytes": 513109068,
+  "gaussian_count": 2068982,
+  "camera_count": 251,
+  "local_source_candidates": [
+    "vggt/outputs/tandt_truck_graphdeco_30k_fullres/point_cloud/iteration_30000/point_cloud.ply"
+  ]
+}
