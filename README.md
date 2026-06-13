@@ -157,17 +157,13 @@ python -m src.tools.run_paper_aligned_sfm \
   --max-pnp-median-error 6.0 \
   --strict-pnp-mean-error 6.0 \
   --max-pnp-mean-error 8 \
-  --retry-failed-images \
   --local-ba-after-registration \
   --run-final-refinement \
-  --use-track-cache \
   --global-ba-growth-ratio 1.3 \
   --global-ba-min-interval 4 \
   --global-ba-max-iterations 40 \
   --global-ba-max-points 0 \
   --global-ba-max-observations 0 \
-  --optimize-shared-focal \
-  --filter-after-ba \
   --diagnose-degenerate-cameras \
   --report-name <scene>_paper_aligned_sfm_report.json
 ```
@@ -193,11 +189,11 @@ python -m src.tools.export_colmap_model --scene configs/scenes/<scene>.yaml
 - matching 使用 `--strategy exhaustive`，适合当前即将运行的少图像 DTU scene。
 - 注册上限使用 `--max-register 70`。
 - PnP 接受阈值以当前 README 主命令为准：strict median `4.0`、strict mean `6.0`、soft median `6.0`、soft mean `8`。
-- 显式开启 `--retry-failed-images`、`--local-ba-after-registration`、`--run-final-refinement`、`--use-track-cache`。
+- 主控制器原生默认开启 failed image retry、track cache、BA 后 filtering、shared-focal optimization；默认命令不再显式传入这些开关。
+- 显式开启 `--local-ba-after-registration` 与 `--run-final-refinement`。
 - 全局 BA 使用增长触发：`--global-ba-growth-ratio 1.3`、`--global-ba-min-interval 4`、`--global-ba-max-iterations 40`。
 - 全局 BA 点数与观测数设为 `0`，表示不限制：`--global-ba-max-points 0`、`--global-ba-max-observations 0`。
-- 开启 `--optimize-shared-focal`，提高 SfM 到 3DGS 相机内参一致性。
-- 开启 `--filter-after-ba` 与 `--diagnose-degenerate-cameras`，但不默认删除退化相机。
+- `--diagnose-degenerate-cameras` 在默认脚本中显式开启，但不默认删除退化相机。
 - 报告名自动包含 scene：`<scene>_paper_aligned_sfm_report.json`，避免多场景实验互相覆盖。
 
 > **Advanced**  
@@ -347,7 +343,7 @@ Run the default SfM pipeline:
 .\scripts\run_sfm_full.ps1 -Scene dtu_scan55
 ```
 
-The script embeds the default DTU settings: exhaustive matching, `--max-register 70`, final refinement, track cache, shared-focal BA, scene-specific reports, and SfM-to-3DGS export under `data/3dgs_inputs/<scene>_sfm/`.
+The controller now enables failed-image retry, track cache, post-BA filtering, and shared-focal BA by default. The script adds the DTU run policy around it: exhaustive matching, `--max-register 70`, final refinement, scene-specific reports, and SfM-to-3DGS export under `data/3dgs_inputs/<scene>_sfm/`.
 
 Prepare 3DGS inputs:
 
@@ -376,7 +372,7 @@ python third_party/gaussian-splatting/metrics.py -m outputs/3dgs/<scene>_sfm
 
 ## SfM Default Policy
 
-The default DTU reproduction settings are embedded in `scripts/run_sfm_full.ps1`. Use the one-command PowerShell entry point for normal reproduction, and inspect `python -m src.tools.<tool_name> --help` only when running ablations or debugging failed scenes.
+The default DTU reproduction settings are split between the controller defaults and `scripts/run_sfm_full.ps1`. Use the one-command PowerShell entry point for normal reproduction, and inspect `python -m src.tools.<tool_name> --help` only when running ablations or debugging failed scenes.
 
 ## Reproducibility Notes
 
