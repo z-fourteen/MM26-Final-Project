@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from src.adapters.vggt_adapter import ensure_vggt_importable
 from src.sfm.config import load_scene_config, resolve_project_path
 from src.tools import check_3dgs_scene
 
@@ -74,7 +75,10 @@ def main() -> int:
         )
 
     print(f"3DGS VGGT source: {output_dir}")
-    print(f"Train command: python train.py -s {output_dir.as_posix()} -m outputs/3dgs/{output_name}")
+    print(
+        "Train command: python third_party/gaussian-splatting/train.py "
+        f"-s {output_dir.as_posix()} -m outputs/3dgs/{output_name}"
+    )
     return 0
 
 
@@ -86,10 +90,14 @@ def list_images(image_dir: Path) -> list[Path]:
 
 
 def save_preprocessed_images(image_paths: list[Path], output_dir: Path, mode: str) -> tuple[list[str], int, int]:
+    ensure_vggt_importable()
     try:
         from vggt.utils.load_fn import load_and_preprocess_images
     except Exception as exc:
-        raise RuntimeError("VGGT is not importable; run this tool in an environment with vggt installed") from exc
+        raise RuntimeError(
+            "VGGT is not importable; run this tool in an environment with "
+            "VGGT dependencies installed and third_party/vggt present"
+        ) from exc
 
     images = load_and_preprocess_images([str(path) for path in image_paths], mode=mode)
     output_dir.mkdir(parents=True, exist_ok=True)

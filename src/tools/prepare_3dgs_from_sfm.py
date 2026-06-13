@@ -61,7 +61,10 @@ def main() -> int:
         )
 
     print(f"3DGS SfM source: {output_dir}")
-    print(f"Train command: python train.py -s {output_dir.as_posix()} -m outputs/3dgs/{output_name}")
+    print(
+        "Train command: python third_party/gaussian-splatting/train.py "
+        f"-s {output_dir.as_posix()} -m outputs/3dgs/{output_name}"
+    )
     return 0
 
 

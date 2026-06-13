@@ -30,8 +30,8 @@ data/3dgs_inputs/<scene_name>_vggt/
 images, SfM features, matches, reports, and intermediate reconstruction state.
 3DGS training should use `data/3dgs_inputs/...` as its `-s` source path.
 
-The bundled `gaussian-splatting` text loader requires `PINHOLE` cameras, so all
-exporters write `PINHOLE fx fy cx cy`.
+The vendored `third_party/gaussian-splatting` text loader requires `PINHOLE`
+cameras, so all exporters write `PINHOLE fx fy cx cy`.
 
 ## SfM Branch
 
@@ -82,12 +82,12 @@ The checker verifies:
 ## Train On A CUDA Machine
 
 ```bash
-python train.py -s data/3dgs_inputs/dtu_scan55_sfm -m outputs/3dgs/dtu_scan55_sfm
-python train.py -s data/3dgs_inputs/dtu_scan55_vggt -m outputs/3dgs/dtu_scan55_vggt
+python third_party/gaussian-splatting/train.py -s data/3dgs_inputs/dtu_scan55_sfm -m outputs/3dgs/dtu_scan55_sfm
+python third_party/gaussian-splatting/train.py -s data/3dgs_inputs/dtu_scan55_vggt -m outputs/3dgs/dtu_scan55_vggt
 ```
 
 If the 3DGS invocation needs an explicit image folder:
 
 ```bash
-python train.py -s data/3dgs_inputs/dtu_scan55_sfm -m outputs/3dgs/dtu_scan55_sfm --images images
+python third_party/gaussian-splatting/train.py -s data/3dgs_inputs/dtu_scan55_sfm -m outputs/3dgs/dtu_scan55_sfm --images images
 ```

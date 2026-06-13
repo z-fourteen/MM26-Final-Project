@@ -1,0 +1,16 @@
+﻿third_party:
+  vggt:
+    repo_path: third_party/vggt
+    package_path: third_party/vggt/vggt
+    checkpoint_path: null
+    notes: "Vendored upstream repository. Keep core model code intact."
+  gaussian_splatting:
+    repo_path: third_party/gaussian-splatting
+    train_entry: third_party/gaussian-splatting/train.py
+    render_entry: third_party/gaussian-splatting/render.py
+    output_root: outputs/3dgs
+    notes: "Vendored 3DGS training/rendering backend. CUDA is required for training."
+  vggt_omega:
+    repo_path: vggt-omega
+    status: deferred
+    notes: "Not integrated in the current normalized pipeline."
