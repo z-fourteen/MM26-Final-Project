@@ -1,35 +1,73 @@
-# SfM to 3DGS Pipeline
+# SfM / VGGT to 3DGS Pipeline
 
-This project exports each reconstructed scene as a COLMAP text model under the
-same scene root used by 3DGS.
+Both reconstruction branches hand off to 3DGS through the same COLMAP-style
+source layout, but they must use separate source roots so their cameras and
+point clouds never overwrite each other.
 
-## Expected Layout
+## Canonical 3DGS Inputs
 
 ```text
-data/scenes/<scene_name>/
+data/3dgs_inputs/<scene_name>_sfm/
   images/
   sparse/
     0/
       cameras.txt
       images.txt
       points3D.txt
-      points3D.ply  # optional, checker can create it
+      points3D.ply
+
+data/3dgs_inputs/<scene_name>_vggt/
+  images/
+  sparse/
+    0/
+      cameras.txt
+      images.txt
+      points3D.txt
+      points3D.ply
 ```
 
-The bundled `gaussian-splatting` loader accepts COLMAP scenes through
-`train.py -s <scene_root>`. Its text camera loader requires `PINHOLE` cameras,
-so `export_colmap_model` writes `PINHOLE fx fy cx cy` even when `fx == fy`.
+`data/scenes/<scene_name>/` remains the project working directory for raw
+images, SfM features, matches, reports, and intermediate reconstruction state.
+3DGS training should use `data/3dgs_inputs/...` as its `-s` source path.
 
-## Export
+The bundled `gaussian-splatting` text loader requires `PINHOLE` cameras, so all
+exporters write `PINHOLE fx fy cx cy`.
+
+## SfM Branch
+
+Prepare a 3DGS source directory from the current SfM reconstruction:
 
 ```powershell
-D:\06_envs\mm26\python.exe -m src.tools.export_colmap_model --scene configs/scenes/dtu_scan55.yaml --output-dir data/scenes/dtu_scan55/sparse/0
+D:\06_envs\mm26\python.exe -m src.tools.prepare_3dgs_from_sfm --scene configs/scenes/dtu_scan55.yaml --output-name dtu_scan55_sfm
 ```
+
+This command copies scene images, exports the current SfM reconstruction as
+COLMAP text, writes `points3D.ply`, and runs the checker.
+
+## VGGT Branch
+
+First run VGGT inference to produce:
+
+```text
+predictions.npz   # extrinsic, intrinsic
+points_depth.npz  # xyz, rgb, optional confidence
+```
+
+Then prepare the VGGT 3DGS source directory:
+
+```powershell
+D:\06_envs\mm26\python.exe -m src.tools.prepare_3dgs_from_vggt --scene configs/scenes/dtu_scan55.yaml --predictions <path-to-predictions.npz> --points <path-to-points_depth.npz> --output-name dtu_scan55_vggt
+```
+
+The VGGT exporter writes preprocessed VGGT images into `images/`, because VGGT
+intrinsics are predicted in that preprocessed image coordinate system.
 
 ## Validate Without CUDA
 
+Either branch can be validated independently:
+
 ```powershell
-D:\06_envs\mm26\python.exe -m src.tools.check_3dgs_scene --source-path data/scenes/dtu_scan55 --write-ply --report-name outputs/dtu_scan55/reports/3dgs_scene_check.json
+D:\06_envs\mm26\python.exe -m src.tools.check_3dgs_scene --source-path data/3dgs_inputs/dtu_scan55_sfm --write-ply --report-name outputs/dtu_scan55/reports/dtu_scan55_sfm_3dgs_scene_check.json
 ```
 
 The checker verifies:
@@ -44,11 +82,12 @@ The checker verifies:
 ## Train On A CUDA Machine
 
 ```bash
-python train.py -s data/scenes/dtu_scan55 -m outputs/3dgs/dtu_scan55
+python train.py -s data/3dgs_inputs/dtu_scan55_sfm -m outputs/3dgs/dtu_scan55_sfm
+python train.py -s data/3dgs_inputs/dtu_scan55_vggt -m outputs/3dgs/dtu_scan55_vggt
 ```
 
 If the 3DGS invocation needs an explicit image folder:
 
 ```bash
-python train.py -s data/scenes/dtu_scan55 -m outputs/3dgs/dtu_scan55 --images images
+python train.py -s data/3dgs_inputs/dtu_scan55_sfm -m outputs/3dgs/dtu_scan55_sfm --images images
 ```
