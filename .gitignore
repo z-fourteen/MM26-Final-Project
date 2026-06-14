@@ -66,3 +66,5 @@ main.tex
 gaussian-splatting/
 vggt/
 dtu.tar.gz/
+dtu/
+tmp/
