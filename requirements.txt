@@ -1,3 +1,6 @@
+# ============================================================
+# Core SfM pipeline (CPU)
+# ============================================================
 numpy>=1.24
 scipy>=1.10
 opencv-contrib-python>=4.8
@@ -8,3 +11,24 @@ matplotlib>=3.7
 Pillow>=10.0
 PyYAML>=6.0
 tqdm>=4.66
+
+# ============================================================
+# VGGT inference & DTU evaluation
+#   $ conda create -n lewm_rt python=3.10 -y
+#   $ conda activate lewm_rt
+#   $ pip install -r requirements.txt
+#   $ pip install -e third_party/vggt
+# ============================================================
+torch>=2.0
+torchvision
+plyfile
+trimesh
+# pycolmap already listed above (used for COLMAP BA integration)
+
+# ============================================================
+# 3D Gaussian Splatting (requires CUDA)
+#   $ pip install -e third_party/gaussian-splatting/submodules/diff-gaussian-rasterization
+#   $ CUDA_HOME=/usr/local/cuda-12.6 python setup.py build_ext --inplace
+#     (from third_party/gaussian-splatting/submodules/simple-knn/)
+#   $ export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.10/site-packages/torch/lib:$LD_LIBRARY_PATH
+# ============================================================
