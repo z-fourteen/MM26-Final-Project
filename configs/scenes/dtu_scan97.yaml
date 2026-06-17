@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan97
+dataset_name: DTU/scan97
+image_dir: data/scenes/dtu_scan97/images
+feature_dir: data/scenes/dtu_scan97/features
+match_dir: data/scenes/dtu_scan97/matches
+verified_dir: data/scenes/dtu_scan97/verified
+track_dir: data/scenes/dtu_scan97/tracks
+sparse_dir: data/scenes/dtu_scan97/sparse/0
+undistorted_dir: data/scenes/dtu_scan97/undistorted
+output_dir: outputs/dtu_scan97
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan97/images
+  num_images: 64

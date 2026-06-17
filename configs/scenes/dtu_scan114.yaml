@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan114
+dataset_name: DTU/scan114
+image_dir: data/scenes/dtu_scan114/images
+feature_dir: data/scenes/dtu_scan114/features
+match_dir: data/scenes/dtu_scan114/matches
+verified_dir: data/scenes/dtu_scan114/verified
+track_dir: data/scenes/dtu_scan114/tracks
+sparse_dir: data/scenes/dtu_scan114/sparse/0
+undistorted_dir: data/scenes/dtu_scan114/undistorted
+output_dir: outputs/dtu_scan114
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan114/images
+  num_images: 64

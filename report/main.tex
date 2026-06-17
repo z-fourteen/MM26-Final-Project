@@ -1,0 +1,444 @@
+% =====================================================================
+%  数模大作业主文件
+% =====================================================================
+\documentclass[lang=cn,a4paper,newtx]{elegantpaper} % 保持与原模板一致的中文模式
+
+% --- 你的论文基础信息配置 ---
+\title{你的校内数学建模大作业题目}
+\author{姓名1 \\ 学号：XXXXXXXX \and 姓名2 \\ 学号：XXXXXXXX \and 姓名3 \\ 学号：XXXXXXXX}
+\institute{某某大学 某某学院}
+\version{} % 留空即可，校内作业通常不需要版本号
+\date{\zhtoday} % 自动生成当天的中文日期
+
+% --- 如果需要常用的数模宏包，可以在这里自行添加 ---
+\usepackage{array}
+\usepackage{booktabs} % 优化三线表
+\usepackage{longtable} % 如果有很长的表格需要跨页
+
+% 引入参考文献库（必须保留，名字要和左侧的 bib 文件一致）
+\addbibresource[location=local]{reference.bib}
+
+\begin{document}
+
+\maketitle % 生成精美的 ElegantPaper 风格标题区
+
+% ==================== 1. 摘要页 ====================
+\begin{abstract}
+本文针对……问题，建立了……模型，实现了……。
+针对问题一，我们采用了……方法，求得结果为……；
+针对问题二，我们引入了……，通过……算法进行求解，结果表明……。
+
+\keywords{数学建模；大作业；关键词1；关键词2}
+\end{abstract}
+
+\newpage % 摘要写完后强行分页，进入数模正文
+
+% ==================== 2. 问题重述与分析 ====================
+\section{问题重述与分析}
+
+\subsection{问题重述}
+本题要求利用手机围绕目标物体拍摄的多张图像，恢复拍摄过程中各张图像对应的相机位姿，并估计被摄物体的三维点坐标。围绕该目标，需要解决以下几个核心问题：
+\begin{enumerate}
+    \item 如何从多张二维图像中建立同一物体点的跨视角对应关系；
+    \item 如何根据图像间的几何约束估计相机之间的相对运动；
+    \item 如何在相机位姿逐步确定的基础上恢复物体的三维点云；
+    \item 如何提高真实手机图像场景下的重建稳定性，并对不同方法的结果进行验证。
+\end{enumerate}
+
+\subsection{问题分析}
+针对相机定位与三维点恢复问题，其本质是多视图几何重建问题。单张图像缺少深度信息，无法唯一确定三维结构；多张图像之间的公共观测、视差关系和极几何约束则为恢复相机运动与空间点坐标提供了依据。因此，本文首先采用可解释的几何建模路线，即以 SfM 为核心求解框架。
+
+针对真实手机图像中可能出现的弱纹理、误匹配、视角基线不足、平面退化和误差累积等问题，简单的两视图 SfM 流程难以保证稳定性。因此，本文将传统 SfM 升级为增量式 SfM 流程，通过初始图像对选择、Next-Best-View 评分、PnP 注册门控、三角化、局部/全局 BA 和过滤机制，逐步控制误差传播并提高重建可靠性。
+
+针对几何 SfM 对纹理和匹配质量较敏感、稀疏点云难以直接反映下游三维表达能力的问题，本文进一步引入 VGGT 和 3DGS 作为扩展分析手段。其中，VGGT 作为学习式三维感知对照分支，用于比较数据驱动方法与几何方法的差异；3DGS 作为下游可渲染验证后端，用于检验 SfM 或 VGGT 输出的相机位姿和点云是否能够支持稳定的三维表达。
+
+% ==================== 3. 模型假设 ====================
+\section{模型假设}
+\subsection{SfM 几何重建假设}
+增量式 SfM 是本文完成相机定位和稀疏点云重建的核心建模部分。为便于后续建立投影模型、极几何模型、三角化模型和 BA 优化模型，作出如下假设：
+\begin{enumerate}
+    \item 相机成像满足针孔模型，空间点经内参和外参投影到图像平面；镜头畸变、滚动快门等非理想因素不作为主要优化变量。
+    \item 拍摄过程中被摄物体保持静止且结构刚性不变，图像差异主要由相机视角变化、成像噪声和光照变化引起。
+    \item 参与重建的有效图像对具有足够重叠区域，且存在可重复检测的局部特征；正确对应在描述子距离上具有可分性，并满足极几何约束。
+    \item 候选匹配、初始图像对和待注册图像均可通过几何一致性、空间覆盖、三角化角度、scene graph 证据和重投影误差进行筛选。
+    \item 新图像注册必须具有足够的 2D-3D 对应、PnP 内点比例、空间覆盖、正深度比例和可接受的重投影误差；未通过门控的图像不写入当前重建状态。
+    \item SfM 结果位于初始化确定的相对尺度坐标系中；相机位姿和三维点通过最小化鲁棒重投影误差进行局部或全局优化。
+\end{enumerate}
+
+\subsection{VGGT 对照分支假设}
+
+\subsection{3DGS 下游验证假设}
+
+% ==================== 4. 符号说明 ====================
+\section{符号说明}
+本文中使用的核心数学符号及其含义如下表所示。符号主要服务于 SfM 几何建模，同时保留 VGGT 对照分支和 3DGS 下游验证中需要的少量统一表示。
+\begin{longtable}{>{\centering\arraybackslash}p{0.18\textwidth}p{0.28\textwidth}p{0.44\textwidth}}
+\caption{核心符号及含义说明}\\
+\toprule
+\textbf{符号} & \textbf{含义} & \textbf{说明} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{符号} & \textbf{含义} & \textbf{说明} \\ \midrule
+\endhead
+$I_i$ & 第 $i$ 张输入图像 & 手机围绕目标物体拍摄得到的二维图像 \\
+$\mathbf{x}_{ij}$ & 第 $j$ 个空间点在图像 $I_i$ 中的像素坐标 & 非齐次二维坐标，$\mathbf{x}_{ij}=(u_{ij},v_{ij})^\mathsf{T}$ \\
+$\tilde{\mathbf{x}}_{ij}$ & 齐次像素坐标 & $\tilde{\mathbf{x}}_{ij}=(u_{ij},v_{ij},1)^\mathsf{T}$ \\
+$\mathbf{d}_{ia}$ & 图像 $I_i$ 中第 $a$ 个特征点的描述子 & 本文使用 SIFT 描述子并进行 RootSIFT 归一化 \\
+$\tau_r$ & 最近邻比值检验阈值 & 用于筛除描述子匹配中的歧义对应 \\
+$\mathcal{C}_{ij}$ & 图像对 $(I_i,I_j)$ 的真实同名点集合 & 表示重叠区域中来自同一物体点的理想对应关系 \\
+$\mathcal{M}_{ij}^{\mathrm{in}}$ & 几何内点匹配集合 & 候选匹配中满足极几何约束的对应关系 \\
+$\mathcal{M}_{ij}^{\mathrm{out}}$ & 离群匹配集合 & 由重复纹理、遮挡、反光或描述子歧义产生的错误对应 \\
+$m_{\min}$ & 最小有效内点数 & 后续估计基础矩阵、本质矩阵或初始化所需的最低匹配规模 \\
+$d_F,\tau_F$ & 基础矩阵几何误差及阈值 & 用于定义 RANSAC 几何验证中的内点集合 \\
+$N_{ij}$ & 图像对几何内点数 & 通过基础矩阵验证后保留的匹配数量 \\
+$r_{ij}^{E}, r_{ij}^{H}$ & 本质矩阵比例与单应矩阵比例 & 分别衡量标定几何支持和单应性退化倾向 \\
+$\alpha_{ij}$ & 图像对中位三角化角 & 衡量两视图基线是否有利于稳定三角化 \\
+$S_{ij}$ & 初始图像对评分 & 用于从 scene graph 中选择初始化图像对 \\
+$\mathbf{X}_j$ & 第 $j$ 个三维空间点 & 非齐次三维坐标，$\mathbf{X}_j=(X_j,Y_j,Z_j)^\mathsf{T}$ \\
+$\tilde{\mathbf{X}}_j$ & 齐次三维坐标 & $\tilde{\mathbf{X}}_j=(X_j,Y_j,Z_j,1)^\mathsf{T}$ \\
+$K_i$ & 第 $i$ 张图像的相机内参矩阵 & 本文采用针孔相机模型，3DGS 交付使用 PINHOLE 形式 \\
+$R_i,\mathbf{t}_i$ & 第 $i$ 个相机的旋转矩阵和平移向量 & 表示世界坐标到相机坐标的外参变换 \\
+$P_i$ & 第 $i$ 个相机的投影矩阵 & $P_i=K_i[R_i\mid\mathbf{t}_i]$ \\
+$F_{ij}$ & 图像 $I_i$ 与 $I_j$ 间的基础矩阵 & 描述未标定像素坐标下的极几何约束 \\
+$E_{ij}$ & 图像 $I_i$ 与 $I_j$ 间的本质矩阵 & 在已知内参后描述归一化相机坐标下的极几何约束 \\
+$H_{ij}$ & 图像 $I_i$ 与 $I_j$ 间的单应矩阵 & 用于识别平面或弱基线导致的退化倾向 \\
+$\mathcal{M}_{ij}$ & 图像对 $(I_i,I_j)$ 的候选匹配集合 & 由局部特征描述子匹配得到 \\
+$\mathcal{O}$ & 有效观测集合 & $(i,j)\in\mathcal{O}$ 表示图像 $I_i$ 观测到三维点 $\mathbf{X}_j$ \\
+$\pi(\cdot)$ & 投影函数 & 将三维点经相机参数投影到二维像素平面 \\
+$e_{ij}$ & 重投影误差 & $e_{ij}=\mathbf{x}_{ij}-\pi(K_i,R_i,\mathbf{t}_i,\mathbf{X}_j)$ \\
+$\rho(\cdot)$ & 鲁棒损失函数 & 用于降低误匹配和异常观测对 BA 的影响 \\
+$\mathcal{R},\mathcal{U}$ & 已注册图像集合与未注册图像集合 & 增量式 SfM 中的状态集合 \\
+$\mathcal{V}_i$ & 候选 2D-3D 对应集合 & 未注册图像 $I_i$ 中可关联到已有三维点的观测 \\
+$\mathcal{I}_i$ & PnP 内点集合 & PnP-RANSAC 后满足重投影误差阈值的 2D-3D 对应 \\
+$s_i$ & 待注册图像评分 & 综合 2D-3D 支持、空间覆盖、邻接证据等因素 \\
+$n_i,p_i,c_i,g_i,l_i,h_i$ & NBV 评分因子 & 表示 2D-3D 支持、图像覆盖、邻接证据和单应性退化惩罚等因素 \\
+$\tau_{\mathrm{pnp}}$ & PnP 重投影阈值 & 判断 PnP-RANSAC 内点的像素误差阈值 \\
+$\hat{P}_i,\hat{D}_i$ & VGGT 预测的相机和深度结果 & 作为学习式三维感知对照分支的输出表示 \\
+$\mathcal{G}$ & 3D Gaussian Splatting 表示 & 由一组三维高斯基元构成的可渲染场景表示 \\
+\bottomrule
+\end{longtable}
+
+% ==================== 5. 模型的建立与求解（核心） ====================
+\section{模型的建立与求解}
+\subsection{跨视角对应关系}
+题目首先需要判断不同图像中哪些二维观测来自同一物体点。本文将该问题分解为特征提取与特征匹配两个阶段。对图像 $I_i$，SIFT 通过高斯尺度空间
+\begin{equation}
+    L_i(u,v,\sigma)=G(u,v,\sigma)*I_i(u,v),
+\end{equation}
+及差分高斯函数
+\begin{equation}
+    \operatorname{DoG}_i(u,v,\sigma)
+    =L_i(u,v,k\sigma)-L_i(u,v,\sigma).
+\end{equation}
+检测尺度极值点，并用关键点邻域内的梯度方向直方图形成 128 维描述子。记原始 SIFT 描述子为 $\mathbf{s}_{ia}\in\mathbb{R}^{128}$，本文采用 RootSIFT 归一化：
+\begin{equation}
+    \bar{\mathbf{s}}_{ia}
+    =
+    \frac{\mathbf{s}_{ia}}
+    {\|\mathbf{s}_{ia}\|_1+\varepsilon},
+    \qquad
+    \mathbf{d}_{ia}
+    =
+    \sqrt{\bar{\mathbf{s}}_{ia}},
+\end{equation}
+其中平方根对向量逐元素作用。该处理等价于在描述子层面增强 Hellinger 距离的判别效果，能够提高跨视角、跨光照匹配的稳定性。
+
+完成特征提取后，对图像对 $(I_i,I_j)$ 建立描述子匹配。设 $\mathbf{d}_{ia}$ 与 $\mathbf{d}_{jb}$ 分别为两幅图像中的 RootSIFT 描述子，使用欧氏距离
+\begin{equation}
+    D(a,b)=\left\|\mathbf{d}_{ia}-\mathbf{d}_{jb}\right\|_2 .
+\end{equation}
+对 $I_i$ 中的特征点 $a$，在 $I_j$ 中寻找最近邻 $b_1(a)$ 和次近邻 $b_2(a)$：
+\begin{equation}
+    b_1(a)=\arg\min_b D(a,b),
+    \qquad
+    b_2(a)=\arg\min_{b\ne b_1(a)} D(a,b).
+\end{equation}
+若最近邻与次近邻距离满足比值检验
+\begin{equation}
+    \frac{D(a,b_1(a))}{D(a,b_2(a))}<\tau_r ,
+\end{equation}
+则匹配 $(a,b_1(a))$ 通过单向描述子筛选。为进一步排除偶然近邻，本文采用双向一致性约束。记
+\begin{equation}
+    a_1(b)=\arg\min_{a'} D(a',b),
+\end{equation}
+仅当 $a_1(b_1(a))=a$ 时，匹配 $(a,b_1(a))$ 被保留。最终候选匹配集合为
+\begin{equation}
+    \mathcal{M}_{ij}
+    =
+    \left\{
+    (a,b_1(a))\mid
+    \frac{D(a,b_1(a))}{D(a,b_2(a))}<\tau_r,\ 
+    a_1(b_1(a))=a
+    \right\}.
+\end{equation}
+该集合只表示外观描述子层面的对应关系，仍需在后续通过基础矩阵、本质矩阵和单应矩阵验证其几何一致性。RootSIFT、比值检验和双向一致性构成了本文在进入几何验证前的匹配质量控制。
+
+\subsection{两视图几何与初始化}
+\subsubsection{极几何约束}
+在获得候选匹配集合 $\mathcal{M}_{ij}$ 后，需要判断哪些匹配同时满足外观相似性和几何一致性。本文采用针孔相机模型描述成像过程：
+\begin{equation}
+    \tilde{\mathbf{x}}_{ij}\sim P_i\tilde{\mathbf{X}}_j
+    =K_i[R_i\mid\mathbf{t}_i]\tilde{\mathbf{X}}_j .
+\end{equation}
+正确匹配 $(a,b)$ 应满足基础矩阵约束
+\begin{equation}
+    \tilde{\mathbf{x}}_{jb}^{\mathsf{T}}F_{ij}\tilde{\mathbf{x}}_{ia}=0 .
+\end{equation}
+RANSAC 几何验证根据极线误差得到基础矩阵内点集合：
+\begin{equation}
+    \mathcal{M}_{ij}^{F}
+    =
+    \{(a,b)\in\mathcal{M}_{ij}\mid d_F(a,b)<\tau_F\},
+    \qquad
+    N_{ij}=|\mathcal{M}_{ij}^{F}|.
+\end{equation}
+在相机内参已知或可近似估计时，可由基础矩阵得到本质矩阵
+\begin{equation}
+    E_{ij}=K_j^{\mathsf{T}}F_{ij}K_i ,
+\end{equation}
+同时估计单应矩阵 $H_{ij}$ 和本质矩阵内点，用于判断图像对是否存在平面或弱基线退化。记原始匹配数为 $M_{ij}=|\mathcal{M}_{ij}|$，单应矩阵内点数和本质矩阵内点数分别为 $N_{ij}^{H}$、$N_{ij}^{E}$，则
+\begin{equation}
+    r_{ij}^{E}=\frac{N_{ij}^{E}}{\max(N_{ij},1)},
+    \qquad
+    r_{ij}^{H}=\frac{N_{ij}^{H}}{\max(N_{ij},1)} .
+\end{equation}
+其中 $r_{ij}^{E}$ 衡量标定两视图几何支持度，$r_{ij}^{H}$ 衡量单应性退化倾向。
+
+\subsubsection{相对位姿恢复}
+本质矩阵满足
+\begin{equation}
+    E_{ij}=[\mathbf{t}_{ij}]_{\times}R_{ij},
+\end{equation}
+由 $E_{ij}$ 分解可得到多组候选相对位姿，因此需要利用正深度约束选择物理可行解。令 $\mathbf{X}_{ab}(R,\mathbf{t})$ 表示在候选位姿下由匹配 $(a,b)$ 三角化得到的空间点，则选择
+\begin{equation}
+    (R_{ij}^{*},\mathbf{t}_{ij}^{*})
+    =
+    \arg\max_{(R,\mathbf{t})}
+    \frac{1}{|\mathcal{M}_{ij}^{F}|}
+    \sum_{(a,b)\in\mathcal{M}_{ij}^{F}}
+    \mathbf{1}
+    \left[
+    Z_i(\mathbf{X}_{ab})>0
+    \land
+    Z_j(\mathbf{X}_{ab})>0
+    \right].
+\end{equation}
+初始化时固定第一幅图像坐标系为世界坐标系：
+\begin{equation}
+    R_i=I,\qquad \mathbf{t}_i=\mathbf{0},
+\end{equation}
+并令第二幅图像的外参为
+\begin{equation}
+    R_j=R_{ij}^{*},\qquad \mathbf{t}_j=\mathbf{t}_{ij}^{*}.
+\end{equation}
+
+\subsubsection{初始图像对评分}
+初始图像对的选择直接影响后续增量 SfM 是否稳定。本文将每条已验证图像对边 $e_{ij}$ 看作初始化候选，并按照几何质量、退化风险和 scene graph 连通性进行评分。设 $b_{ij}^{\mathrm{stat}}$、$b_{ij}^{\mathrm{type}}$、$b_{ij}^{\mathrm{calib}}$ 分别表示验证状态、几何模型类型和标定可信度奖励，$g_{ij}$ 表示两端图像在 scene graph 中的连通性，则代码实现中的初始对评分为
+\begin{equation}
+\begin{aligned}
+    S_{ij}={}&
+    2b_{ij}^{\mathrm{stat}}
+    +2b_{ij}^{\mathrm{type}}
+    +1.5b_{ij}^{\mathrm{calib}}
+    +2\log(1+N_{ij})\,r_{ij}^{F}  \\
+    &+\phi_{\alpha}(\alpha_{ij})
+    +r_{ij}^{E}
+    +0.5\log(1+g_{ij})
+    -2\min(r_{ij}^{H},2),
+\end{aligned}
+\end{equation}
+其中
+\begin{equation}
+    r_{ij}^{F}=\frac{N_{ij}}{\max(M_{ij},1)},
+    \qquad
+    \phi_{\alpha}(\alpha_{ij})
+    =
+    \frac{\min(\max(\alpha_{ij},0),30)}{30}.
+\end{equation}
+该评分函数是本文初始化阶段的核心改进：它同时奖励匹配支持度、基线质量、标定几何可信度和后续扩展潜力，并用 homography ratio 惩罚平面或弱基线退化。最终选择
+\begin{equation}
+    (i^{*},j^{*})
+    =
+    \arg\max_{(i,j)\in\mathcal{E}_{\mathrm{valid}}}S_{ij},
+\end{equation}
+其中 $\mathcal{E}_{\mathrm{valid}}$ 为通过基本几何验证且满足初始化候选条件的图像对集合。
+
+\subsubsection{初始点云生成}
+选定初始图像对后，对每个内点匹配 $(a,b)\in\mathcal{M}_{i^{*}j^{*}}^{F}$ 进行 DLT 三角化：
+\begin{equation}
+    \tilde{\mathbf{x}}_{i^{*}a}\times(P_{i^{*}}\tilde{\mathbf{X}}_{ab})=\mathbf{0},
+    \qquad
+    \tilde{\mathbf{x}}_{j^{*}b}\times(P_{j^{*}}\tilde{\mathbf{X}}_{ab})=\mathbf{0}.
+\end{equation}
+对应齐次线性方程为
+\begin{equation}
+    A_{ab}\tilde{\mathbf{X}}_{ab}=\mathbf{0},
+\end{equation}
+通过奇异值分解得到 $\tilde{\mathbf{X}}_{ab}$。为避免不稳定的初始点进入后续增量流程，本文保留满足以下条件的点：
+\begin{equation}
+    \mathbf{X}_{ab}\in\mathcal{P}_{0}
+    \Longleftrightarrow
+    \begin{cases}
+    \mathbf{X}_{ab}\ \text{有限},\\
+    Z_{i^{*}}(\mathbf{X}_{ab})>0,\quad Z_{j^{*}}(\mathbf{X}_{ab})>0,\\
+    \frac{1}{2}\left(e_{i^{*}a}+e_{j^{*}b}\right)<\tau_{\mathrm{repr}}.
+    \end{cases}
+\end{equation}
+其中 $e_{i^{*}a}$ 和 $e_{j^{*}b}$ 为两幅图像中的重投影误差，$\tau_{\mathrm{repr}}$ 为初始化允许的最大重投影误差阈值。初始化成功还需满足保留点数、保留比例和中位重投影误差等质量门控。
+
+\subsection{增量式相机注册与三维点恢复}
+初始化完成后，系统维护已注册图像集合 $\mathcal{R}$、未注册图像集合 $\mathcal{U}$ 和当前三维点集合 $\mathcal{P}$。每轮增量重建需要解决两个问题：先从 $\mathcal{U}$ 中选择最适合注册的下一张图像，再利用该图像与已有三维点之间的 2D-3D 对应估计相机位姿。
+
+\subsubsection{Next-Best-View 选择}
+对任意未注册图像 $I_i\in\mathcal{U}$，由已有 tracks 和当前点云构造候选 2D-3D 对应集合
+\begin{equation}
+    \mathcal{V}_i
+    =
+    \{(a,j)\mid \mathbf{x}_{ia}\ \text{可关联到已有三维点}\ \mathbf{X}_j\},
+    \qquad
+    n_i=|\mathcal{V}_i|.
+\end{equation}
+仅按 $n_i$ 选择图像容易偏向局部密集但空间分布退化的候选，因此本文采用 Next-Best-View 评分。设 $p_i$ 为多层图像覆盖得分，$c_i$ 为 $4\times4$ 网格覆盖数，$g_i$ 为候选图像与已注册图像之间的 verified 邻接数量，$l_i$ 为其中 general 几何边数量，$h_i$ 为平均 homography ratio，则实现中的评分为
+\begin{equation}
+    s_i
+    =
+    p_i
+    +80c_i
+    +20\min(g_i,30)
+    +10\min(l_i,30)
+    +5\log(1+n_i)
+    -20h_i .
+\end{equation}
+其中覆盖项鼓励 2D-3D 对应分布在图像不同区域，邻接项鼓励选择与已注册子图连接紧密的图像，$-20h_i$ 惩罚单应性过强的候选。最终选择
+\begin{equation}
+    i^{*}=\arg\max_{i\in\mathcal{U}}s_i,
+\end{equation}
+并要求候选满足基本支持与覆盖门槛：
+\begin{equation}
+    n_i\ge n_{\min},\qquad c_i\ge c_{\min}.
+\end{equation}
+
+\subsubsection{PnP 位姿注册}
+选定候选图像 $I_{i^{*}}$ 后，利用 $\mathcal{V}_{i^{*}}$ 中的 2D-3D 对应估计该图像的外参。对任意对应 $(a,j)\in\mathcal{V}_{i^{*}}$，定义投影残差
+\begin{equation}
+    e_{i^{*}j}(R,\mathbf{t})
+    =
+    \mathbf{x}_{i^{*}a}
+    -\pi(K_{i^{*}},R,\mathbf{t},\mathbf{X}_j).
+\end{equation}
+PnP-RANSAC 根据重投影误差定义内点集合
+\begin{equation}
+    \mathcal{I}_{i^{*}}
+    =
+    \{(a,j)\in\mathcal{V}_{i^{*}}
+    \mid
+    \|e_{i^{*}j}(R,\mathbf{t})\|_2<\tau_{\mathrm{pnp}}\}.
+\end{equation}
+在 RANSAC 选出内点后，进一步求解
+\begin{equation}
+    (R_{i^{*}}^{*},\mathbf{t}_{i^{*}}^{*})
+    =
+    \arg\min_{R,\mathbf{t}}
+    \sum_{(a,j)\in\mathcal{I}_{i^{*}}}
+    \left\|
+    e_{i^{*}j}(R,\mathbf{t})
+    \right\|_2^2 .
+\end{equation}
+为避免错误注册进入重建状态，本文对 PnP 结果设置门控。基本支持条件为
+\begin{equation}
+    |\mathcal{V}_{i^{*}}|\ge n_{\min},
+    \qquad
+    |\mathcal{I}_{i^{*}}|\ge n_{\mathrm{pnp}},
+    \qquad
+    \frac{|\mathcal{I}_{i^{*}}|}{|\mathcal{V}_{i^{*}}|}
+    \ge r_{\mathrm{pnp}} ,
+\end{equation}
+\begin{equation}
+    \overline{e}_{i^{*}}\le \tau_{\mathrm{mean}},
+    \qquad
+    \operatorname{median}(e_{i^{*}})\le \tau_{\mathrm{med}},
+\end{equation}
+并检查正深度比例和深度分布：
+\begin{equation}
+    \frac{1}{|\mathcal{I}_{i^{*}}|}
+    \sum_{(a,j)\in\mathcal{I}_{i^{*}}}
+    \mathbf{1}[Z_{i^{*}}(\mathbf{X}_j)>0]
+    \ge \eta_{\mathrm{ch}},
+    \qquad
+    \operatorname{IQR}\{Z_{i^{*}}(\mathbf{X}_j)\}\ge \eta_{\mathrm{depth}} .
+\end{equation}
+若结果超过严格误差阈值但仍低于最大允许阈值，则记录为 soft accept；若未通过门控，则保留失败原因并在后续轮次中重试。这一设计使 PnP 注册不仅给出位姿估计，也给出可诊断的失败原因。
+
+\subsubsection{新点补充与状态更新}
+当 $I_{i^{*}}$ 通过 PnP 注册后，更新注册集合和相机参数：
+\begin{equation}
+    \mathcal{R}\leftarrow\mathcal{R}\cup\{i^{*}\},
+    \qquad
+    \mathcal{U}\leftarrow\mathcal{U}\setminus\{i^{*}\}.
+\end{equation}
+随后对包含新注册视角的 tracks 使用前文 DLT 或多视图三角化补充新点，记新增点集合为 $\Delta\mathcal{P}_{i^{*}}$，则
+\begin{equation}
+    \mathcal{P}\leftarrow\mathcal{P}\cup\Delta\mathcal{P}_{i^{*}}.
+\end{equation}
+新增三维点继续按正深度、三角化角度和重投影误差进行过滤。由此，重建过程在 NBV 选择、PnP 注册和新点补充之间迭代推进。
+
+\subsection{重投影误差优化}
+由于匹配噪声、PnP 误差和三角化误差会在增量过程中累积，需要通过 Bundle Adjustment 对相机位姿和三维点进行联合优化。本文采用重投影误差作为核心目标函数：
+\begin{equation}
+    \min_{\{R_i,\mathbf{t}_i\},\{\mathbf{X}_j\}}
+    \sum_{(i,j)\in\mathcal{O}}
+    \rho\left(
+    \left\|
+    \mathbf{x}_{ij}
+    -\pi(K_i,R_i,\mathbf{t}_i,\mathbf{X}_j)
+    \right\|_2^2
+    \right).
+\end{equation}
+其中 $\mathcal{O}$ 为所有有效观测集合，$\rho(\cdot)$ 为鲁棒损失函数，用于降低离群观测对整体优化的影响。代码实现中 BA 由 SciPy 最小二乘优化完成，支持局部 BA 和全局 BA：局部 BA 在新图像注册后高频执行，用于快速稳定邻域结构；全局 BA 在模型增长达到一定比例后触发，用于整体减小误差漂移。对于手机图像内参不完全可靠的情况，模型还允许在统一假设下优化共享焦距，但不引入复杂径向畸变模型。
+
+优化后，仍需根据重投影误差和观测质量对点与观测进行过滤。本文的增量式控制流程可概括为：
+\begin{enumerate}
+    \item 初始化得到两视图相对位姿和初始点云；
+    \item 按 NBV 评分选择候选图像，并由 PnP 门控决定是否注册；
+    \item 注册成功后补充新点，执行局部 BA、误差评估和过滤；
+    \item 当模型增长达到阈值时触发全局 BA，最后执行全局 refinement。
+\end{enumerate}
+
+\subsection{VGGT 对照模型与 3DGS 验证模型}
+为分析传统几何方法与学习式方法的差异，本文引入 VGGT 作为对照分支。VGGT 不作为本文重新训练或改进的网络模型，而是被视为预训练映射
+\begin{equation}
+    (\hat{P}_i,\hat{D}_i,\hat{\mathbf{X}})
+    =f_{\theta}(I_1,I_2,\ldots,I_N),
+\end{equation}
+其中 $\theta$ 为预训练模型参数，$\hat{P}_i$ 表示预测相机，$\hat{D}_i$ 表示预测深度，$\hat{\mathbf{X}}$ 表示由深度或点预测得到的三维结构。本文关心的是将其输出整理到与 SfM 一致的相机、内参和点云表示中，从而与几何分支在同一数据组织下比较。
+
+对于下游三维表达，本文使用 3D Gaussian Splatting 作为验证后端。其场景可抽象表示为
+\begin{equation}
+    \mathcal{G}
+    =
+    \{(\boldsymbol{\mu}_k,\Sigma_k,\mathbf{c}_k,\alpha_k)\}_{k=1}^{M},
+\end{equation}
+其中 $\boldsymbol{\mu}_k$ 为第 $k$ 个三维高斯中心，$\Sigma_k$ 为协方差，$\mathbf{c}_k$ 为颜色或外观参数，$\alpha_k$ 为不透明度。本文不重新推导或实现 3DGS 优化器，而是将 SfM 与 VGGT 的结果统一导出为 COLMAP-style 的 \texttt{images/ + sparse/0/} 结构，并检查相机模型、图像尺寸、注册图像和稀疏点云是否满足 3DGS 输入要求。若同一后端下某一分支更容易获得稳定渲染结果，则说明该分支输出的相机和点云具有更好的下游可用性。
+
+% ==================== 6. 模型的评价、改进与推广 ====================
+\section{模型的评价、改进与推广}
+\subsection{模型的优点}
+\begin{itemize}
+    \item 模型结构简单，计算速度快；
+    \item 鲁棒性强，不易受噪点干扰。
+\end{itemize}
+\subsection{模型的缺点与改进方向}
+未考虑……的影响，未来可以引入……进行修正。
+
+% ==================== 7. 参考文献 ====================
+% 你们可以在这里直接用 bibtex 引用，或者临时手动用 \bibitem
+\printbibliography[heading=bibintoc, title=\ebibname]
+
+% ==================== 8. 附录（贴代码） ====================
+\newpage
+\appendix
+\section{核心源代码}
+\subsection{问题一求解 Python 代码}
+% 如果有代码，可以在这里展示
+
+\end{document}

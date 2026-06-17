@@ -1,0 +1,13 @@
+{
+  "id": "vggt_ba_truck_7k",
+  "name": "VGGT + BA · Truck · 7K",
+  "method": "VGGT",
+  "ply": "point_cloud.ply",
+  "cameras": "cameras.json",
+  "ply_bytes": 100329187,
+  "gaussian_count": 404547,
+  "camera_count": 32,
+  "local_source_candidates": [
+    "vggt/outputs/tandt_truck_vggt32_ba_v1_graphdeco_7k/point_cloud/iteration_7000/point_cloud.ply"
+  ]
+}

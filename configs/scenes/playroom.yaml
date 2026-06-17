@@ -1,0 +1,12 @@
+scene_name: playroom
+dataset_name: playroom
+image_dir: data/scenes/playroom/images
+feature_dir: data/scenes/playroom/features
+match_dir: data/scenes/playroom/matches
+verified_dir: data/scenes/playroom/verified
+track_dir: data/scenes/playroom/tracks
+sparse_dir: data/scenes/playroom/sparse/0
+undistorted_dir: data/scenes/playroom/undistorted
+output_dir: outputs/playroom
+subset:
+  enabled: false

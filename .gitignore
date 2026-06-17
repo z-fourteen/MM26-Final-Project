@@ -1,0 +1,70 @@
+﻿__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.ply
+
+
+# Local migration leftovers / Codex workspace metadata
+MM26-Final-Project/
+vggt_old_backup/
+.agents/
+.codex/
+.vscode/
+*.pdf
+
+# LaTeX build artifacts.
+/report/*.aux
+/report/*.bcf
+/report/*.log
+/report/*.out
+/report/*.run.xml
+/report/*.synctex.gz
+
+# Dataset archives, raw images, generated caches, and large outputs.
+/data/raw/
+/data/external/
+/data/3dgs_inputs/
+/data/scenes/*/images/*
+/data/scenes/*/images_resized/*
+/data/scenes/*/features/*
+/data/scenes/*/matches/*
+/data/scenes/*/verified/*
+/data/scenes/*/tracks/*
+/data/scenes/*/sparse/*
+/data/scenes/*/sparse/0/**
+/data/scenes/*/undistorted/*
+/outputs/*
+
+# Vendored third-party repositories are tracked, but their generated local
+# data, caches, checkpoints, and training outputs are not.
+/third_party/**/__pycache__/
+/third_party/**/*.pyc
+/third_party/**/.ipynb_checkpoints/
+/third_party/gaussian-splatting/data/
+/third_party/gaussian-splatting/output/
+/third_party/gaussian-splatting/outputs/
+/third_party/vggt/output/
+/third_party/vggt/outputs/
+/third_party/**/checkpoints/
+/third_party/**/pretrained/
+/third_party/**/*.pth
+/third_party/**/*.pt
+/third_party/**/*.ckpt
+/third_party/**/*.ply
+
+# Keep empty project structure in Git.
+!data/scenes/**/.gitkeep
+!outputs/**/.gitkeep
+!data/scenes/*/sparse/
+!data/scenes/*/sparse/0/
+!data/scenes/*/sparse/0/.gitkeep
+
+# pjj_ local repo adaptation
+
+main.tex 
+.claude/
+gaussian-splatting/
+vggt/
+dtu.tar.gz/
+dtu/
+tmp/

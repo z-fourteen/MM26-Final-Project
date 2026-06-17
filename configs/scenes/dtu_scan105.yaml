@@ -1,0 +1,14 @@
+﻿scene_name: dtu_scan105
+dataset_name: DTU/scan105
+image_dir: data/scenes/dtu_scan105/images
+feature_dir: data/scenes/dtu_scan105/features
+match_dir: data/scenes/dtu_scan105/matches
+verified_dir: data/scenes/dtu_scan105/verified
+track_dir: data/scenes/dtu_scan105/tracks
+sparse_dir: data/scenes/dtu_scan105/sparse/0
+undistorted_dir: data/scenes/dtu_scan105/undistorted
+output_dir: outputs/dtu_scan105
+subset:
+  enabled: false
+  source_image_dir: data/raw/DTU/scan105/images
+  num_images: 64
